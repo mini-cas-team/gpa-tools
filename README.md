@@ -22,6 +22,80 @@ No model is called at run time. Reading a new transcript format is a
 design-time activity that produces a profile YAML; the shipped app is ordinary
 deterministic Python.
 
+## Getting started
+
+### 1. Clone and install
+
+```bash
+git clone https://github.com/johnprofessional132/gpa-tools.git
+cd gpa-tools
+
+python3.12 -m venv .venv312
+.venv312/bin/pip install -r requirements.txt
+```
+
+Two command-line tools are called directly and are not Python packages:
+`pdftotext` for pages with a text layer, and `pdftoppm` + `tesseract` for
+scanned pages. On Debian or Ubuntu:
+
+```bash
+sudo apt install poppler-utils tesseract-ocr
+```
+
+`pdftotext` is required for every run; the other two only for scanned
+transcripts. A missing tool is reported by name rather than failing obscurely.
+
+Then point `config.yaml` at your transcripts:
+
+```yaml
+pdf-folder: /path/to/transcripts
+out-folder: /path/to/output
+category: [STEM]
+```
+
+### 2. Teach it new transcripts and new categories
+
+Two skills ship with the repo, in `.claude/skills/`. Run them from a Claude
+Code session started in the project root — they appear as slash commands once
+the session picks them up, and a session started before they existed needs a
+restart to see them.
+
+| command | use it when |
+|---|---|
+| `/add-school-profile` | new PDFs arrive that no profile claims — a run reports `no layout profile matched confidently (score 0)`, or the table shows `(unrecognised institution)` |
+| `/add-category <NAME>` | you want to rank on a new taxonomy, e.g. `/add-category MEDICAL` |
+
+`/add-school-profile` decides whether the school joins an existing shared
+profile or needs one of its own, then writes the profile and its department
+map. Its reconnaissance step is a plain script you can also run yourself:
+
+```bash
+.venv312/bin/python .claude/skills/add-school-profile/scripts/inspect_unclaimed.py
+```
+
+`/add-category MEDICAL` writes `gpa_ana/categories/rulesets/medical.yaml` **and**
+appends `MEDICAL` to the `category` list in `config.yaml`, so the next run ranks
+it alongside whatever is already there.
+
+Neither skill is required to *run* the tool — they are for teaching it formats
+and taxonomies it does not yet know. Both edit YAML; only a genuinely novel
+course-code shape needs Python.
+
+### 3. Rank the students
+
+```bash
+.venv312/bin/python -m gpa_ana                          # every category in config.yaml
+.venv312/bin/python -m gpa_ana --category MEDICAL       # just one, ignoring the list
+.venv312/bin/python -m gpa_ana --category STEM,MEDICAL  # an explicit set
+.venv312/bin/python -m gpa_ana -v                       # per-file detail
+```
+
+Each category prints its own ranked table and writes
+`rank_<id>_gpa.csv`, `rank_<id>_gpa.json` and
+`extracted/<student>.<id>.courses.json` into `out-folder`. Validation gates and
+warnings are reported once for the run, since they describe the parse rather
+than the taxonomy.
+
 ## Design: two independent axes
 
 Parsing ends at a canonical `Course` record; categorisation begins from it.
