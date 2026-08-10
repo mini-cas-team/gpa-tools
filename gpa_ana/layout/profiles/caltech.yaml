@@ -1,0 +1,9 @@
+id: caltech
+institution: California Institute of Technology
+handler: term_block_table
+fingerprint:
+  text_any: ["CALIFORNIA INSTITUTE OF TECHNOLOGY", "Caltech UID:"]
+code_grammar: space_suffix
+notes: >
+  Mixed-case two-letter departments (Ph, Ma, Ch, Ay, Bi, Ec, En).
+  Note PS = Political Science here, NOT planetary science.

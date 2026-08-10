@@ -1,0 +1,12 @@
+id: usna
+institution: United States Naval Academy
+handler: term_block_table
+fingerprint:
+  text_any: ["UNITED STATES NAVAL ACADEMY", "Alpha Code:"]
+code_grammar: alpha_prefix
+notes: >
+  Codes fuse department and number with no separator (SM221, SP212), so neither
+  space_suffix nor a dotted grammar recovers the department -- hence the
+  alpha_prefix grammar.  Subject letters are Navy-specific: SM = mathematics,
+  SP = physics, SC = chemistry, NS/NL/NE = professional naval science and
+  leadership, HH = history, NL220 is ethics.

@@ -1,0 +1,10 @@
+id: stony_brook
+institution: Stony Brook University
+handler: term_block_table
+fingerprint:
+  text_any: ["STONY BROOK UNIVERSITY"]
+code_grammar: space_suffix
+notes: >
+  AMS is Applied Mathematics and Statistics (a STEM department), not American
+  Studies as the same token means at UMD -- exactly the collision the
+  per-institution department maps exist for.

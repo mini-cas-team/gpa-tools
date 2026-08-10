@@ -1,0 +1,13 @@
+id: princeton
+institution: Princeton University
+handler: term_block_table
+fingerprint:
+  text_any: ["PRINCETON UNIVERSITY", "PUID:"]
+code_grammar: space_suffix
+validation:
+  cumulative_gpa: false
+  term_gpa: false
+notes: >
+  Princeton prints neither term nor cumulative GPA by policy, so those gates do
+  not exist here -- only the course-count total can be cross-checked.
+  ENG = English (not engineering); one course = one unit.

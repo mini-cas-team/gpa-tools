@@ -1,0 +1,13 @@
+# gpa-ana configuration
+#
+# pdf-folder : directory of student transcript PDFs to analyse
+# category   : which course taxonomy to rank on (see gpa_ana/categories/rulesets/)
+
+pdf-folder: /home/personal/Templates/transcripts
+category: [STEM, MEDICAL] # one or more; every listed category is ranked in the same run
+
+# --- optional settings (defaults shown) -------------------------------------
+out-folder: /home/personal/Templates/out # where results are written
+min-category-courses: 4 # exclude students below this many category courses
+# jobs: 0                         # parallel workers (0 = one per CPU); CLI: -j N
+# ocr-dpi: 300                    # render resolution for scanned pages

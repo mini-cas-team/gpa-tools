@@ -1,0 +1,13 @@
+id: chicago
+institution: The University of Chicago
+handler: term_block_table
+fingerprint:
+  text_any: ["THE UNIVERSITY OF CHICAGO", "UCID:"]
+code_grammar: space_suffix
+notes: >
+  Quarter system, and one course is 100 units rather than 3-4 credits, so the
+  credit column runs ~100x every other school in the corpus.  GPA is unaffected
+  (every row carries the same weight, so the weighted mean equals the plain
+  one), and the ranking gate counts courses rather than credits, so the unit
+  mismatch does not leak into it either -- but read their Cred column as
+  "hundreds".

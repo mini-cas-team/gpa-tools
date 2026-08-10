@@ -1,0 +1,9 @@
+id: berkeley
+institution: University of California, Berkeley
+handler: term_block_table
+fingerprint:
+  text_any: ["UNIVERSITY OF CALIFORNIA, BERKELEY"]
+code_grammar: space_suffix
+notes: >
+  Multi-word departments ("CIV ENG 100") -- the space_suffix grammar takes
+  everything before the final token, so the department survives intact.

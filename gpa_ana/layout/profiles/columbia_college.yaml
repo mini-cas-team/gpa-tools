@@ -1,0 +1,9 @@
+id: columbia_college
+institution: Columbia University in the City of New York
+handler: term_block_table
+fingerprint:
+  text_any: ["COLUMBIA UNIVERSITY", "Columbia College"]
+code_grammar: space_suffix
+notes: >
+  Header reads "Grade  Points  Points" -- the first Points column means credits.
+  Roles are resolved by position, not by label, so the duplicate name is safe.

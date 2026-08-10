@@ -1,0 +1,5 @@
+PyYAML>=6.0
+
+# optional: only needed for the OCR path (scanned transcripts)
+numpy>=1.26
+pillow>=10.0

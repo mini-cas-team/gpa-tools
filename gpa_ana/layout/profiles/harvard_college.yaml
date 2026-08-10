@@ -1,0 +1,8 @@
+id: harvard_college
+institution: Harvard University
+handler: term_block_table
+fingerprint:
+  text_any: ["HARVARD UNIVERSITY", "Harvard College"]
+code_grammar: space_suffix
+notes: >
+  Credits column labelled "Credits"; 4.00 scale with no A+.

@@ -1,0 +1,158 @@
+id: STEM
+description: >
+  Science, Technology, Engineering and Mathematics coursework.
+
+notes: >
+  Judgement calls, made explicit so they can be argued with rather than
+  discovered by accident:
+
+    * Psychology, economics, linguistics and cognitive science are treated as
+      NOT STEM.  Each is defended as STEM somewhere; move the token from
+      "exclude" to "include" for a school to flip it.
+    * Environmental *studies* (policy/society framing) is excluded;
+      environmental *science* and earth science departments are included.
+    * Engineering management (Stanford MS&E, Columbia IEOR) is included -- both
+      sit in the engineering school and the coursework is quantitative.
+    * General-education science surveys (Columbia SCNC "Frontiers of Science",
+      Chicago PHSC physical-sciences core) are included on content; Harvard
+      GENED and Chicago SOSC/HUMA are excluded because the department spans all
+      subjects.
+    * Naval Academy professional coursework (NS navigation and ship systems, NL
+      leadership) is excluded even where the content is technical: it is
+      military training rather than an academic science department.  Its
+      engineering and science departments (SM, SP, SC, EE, EM, ES, NE, SI) are
+      included normally.
+    * "analysis" is deliberately NOT a title keyword.  It reads as mathematical
+      analysis but matched Chicago's "The Elements of Economic Analysis I-IV",
+      disputing a correct ECON exclusion eleven times over.  Every mathematics
+      department in the corpus is mapped explicitly, so a course called "Real
+      Analysis" is already caught by its department and the keyword only ever
+      contradicted good mappings.
+
+  Two title disputes are expected and correct, and are left standing rather
+  than papered over:
+
+    * Chicago PHSC 11000 "Environmental History of the Earth" -- the map
+      includes PHSC on content while "history of" excludes it by title.  It is
+      the physical-sciences core, and the map wins.
+    * Penn ECON 2300 "Statistics for Economists" -- "statistics" reads as STEM
+      but the course is taught by, and for, the economics department, which
+      this ruleset excludes.  The map wins.
+
+  Departments are per institution because tokens collide across schools:
+  Caltech PS is Political Science, Princeton ENG is English, Berkeley ESPM
+  courses are culture-and-resources rather than lab science.
+
+institutions:
+
+  harvard_college:
+    include: [MATH, STAT, PHYSICS, PHYSCI, ASTRON, COMPSCI, LIFESCI]
+    exclude: [ECON, ENGLISH, EXPOS, GENED, GOV, HUM, PHIL, PSY, SOCIOL]
+
+  columbia_college:
+    include: [MATH, STAT, PHYS, COMS, APMA, IEOR, EESC, SCNC]
+    exclude: [ANTH, ARTH, CLCV, ECON, ENGL, HIST, HUMA, MUSI, PHIL, POLS, PSYC, SOCI, SPAN]
+
+  mit:
+    # Course numbers are departments: 6 EECS, 8 Physics, 18 Mathematics.
+    include: ["1", "2", "3", "5", "6", "7", "8", "9", "10", "12", "16", "18", "20", "22"]
+    exclude: ["4", "11", "14", "15", "17", "21A", "21G", "21H", "21L", "21M", "21W", "24"]
+
+  caltech:
+    include: [ACM, AY, BI, CH, CS, EE, MA, PH]
+    exclude: [EC, EN, H, L, MU, PS]   # PS = Political Science at Caltech
+
+  berkeley:
+    include: ["CIV ENG", DATA, ENGIN, MATH, PHYSICS, CHEM, EECS, BIOLOGY]
+    exclude: [ECON, ENGLISH, ESPM, HISTORY, MUSIC, PHILOS, PSYCH, UGBA]
+
+  umd:
+    include: [MATH, PHYS, CHEM, ENCH, ENES, ENEE, ENME, CMSC, BSCI]
+    exclude: [ANTH, ARTH, ECON, ENGL, GOVT, HIST, MUSC, PSYC]
+
+  princeton:
+    include: [MAT, PHY, CHM, MOL, NEU, COS, GEO, ORF, CBE, ELE, MAE]
+    exclude: [ANT, ART, ECO, ENG, FRE, MUS, PHI, POL, PSY, WRI]   # ENG = English
+
+  yale:
+    include: [MATH, PHYS, CPSC, CHEM, MCDB, GEOL, ASTR, ENAS, S&DS]
+    exclude: [ANTH, CGSC, ECON, ENGL, EVST, FILM, HIST, HSAR, LING, MUSI, PHIL,
+              PLSC, PSYC, SOCY, SPAN]
+
+  stanford:
+    include: [MATH, STATS, CS, "MS&E", EARTHSYS, PHYSICS, CHEM, BIO, EE, CEE, ME]
+    exclude: [ARTHIST, COMM, ECON, HISTORY, MUSIC, PHIL, POLISCI, PSYCH, PWR, THINK]
+
+  jhu:
+    # Middle segment of AS.nnn.nnn is the department.
+    include: ["020", "030", "110", "171", "250", "270", "271", "540", "580", "601"]
+    exclude: ["010", "060", "061", "070", "100", "150", "180", "190", "191", "230", "376"]
+
+  nyu:
+    # The school suffix is part of the token: CSCI-UA is Courant via CAS.
+    include: [MATH-UA, PHYS-UA, CSCI-UA]
+    exclude: [CORE-UA, ECON-UA, EXPOS-UA, HIST-UA, MUSIC-UA, PSYCH-UA, SOC-UA]
+
+  chicago:
+    include: [MATH, STAT, CMSC, BIOS, PHSC]
+    exclude: [ECON, HIST, HUMA, MUSI, PSYC, SOSC]
+
+  stony_brook:
+    # AMS = Applied Mathematics and Statistics here, not American Studies.
+    include: [AMS, CHE, CSE, PHY]
+    exclude: [ECO, HIS, MUS, POL, PSY, WRT]
+
+  cornell:
+    # AEM is Dyson (applied economics and management), not the engineering
+    # school -- so it does not get the MS&E/IEOR treatment.
+    include: [MATH, CHEM, CS, ENGRI, PHYS]
+    exclude: [AEM, ECON, HIST, MUSIC, PSYCH]
+
+  usna:
+    include: [SM, SP, SC, EE, EM, ES, NE, SI]
+    exclude: [EN, FP, HH, NL, NS]   # EN = English, FP = Political Science
+
+  uva:
+    include: [MATH, STAT, CHEM, CS, PHYS]
+    exclude: [ECON, ENWR, HIST, MUSI, PSYC]
+
+  penn:
+    include: [MATH, PHYS, BIOL, CIS]
+    exclude: [ECON, HIST, MUSC, PHIL, PSYC, WRIT]
+
+  umbc:
+    # AMST is American Studies (compare Stony Brook AMS = Applied Mathematics).
+    include: [MATH, PHYS, CHEM, BIOL, CMSC, STAT]
+    exclude: [AMST, ECON, ENGL, HIST, MUSC, PSYC]
+
+  md_common:
+    # One block for the whole shared-format Maryland family: the eighteen
+    # tokens mean the same thing at every member, which is what makes sharing
+    # a profile legitimate rather than merely convenient.  GEOG is "World
+    # Regional Geography" -- human geography, excluded on the same reasoning
+    # that excludes environmental studies.
+    include: [MATH, BIOL, CHEM, CSCI]
+    exclude: [ART, BUSN, COMM, ECON, ENGL, GEOG, HIST, MUSC, PHED, PHIL, POLS,
+              PSYC, SOCI, SPAN]
+
+# Used only when no institution profile claimed the document.
+generic_include:
+  [MATH, MATHS, MTH, STAT, STATS, PHYS, PHYSICS, CHEM, CHEMISTRY, BIO, BIOL,
+   BIOLOGY, CS, COMPSCI, CSE, EECS, EE, ECE, ENGR, ENGIN, ENGINEERING, ME, CEE,
+   CIVIL, MECHE, AERO, ASTRO, ASTRON, GEOL, GEOSCI, ENVSCI, NEURO, NEUROSCI,
+   DATA, INFO, IEOR, ORF, ACM, APMA]
+
+# Advisory only: keywords never override an explicit department mapping, they
+# raise a "disputed" flag so a wrong map surfaces instead of hiding.
+title_audit:
+  include_keywords:
+    [calculus, algebra, geometry, topology, probability, statistics,
+     mathematic, physics, mechanics, quantum, thermodynamic, chemistry, chemical,
+     biology, biological, molecular, genetics, neuroscience, computing, computer,
+     programming, algorithm, data science, machine learning, engineering,
+     circuits, electronics, astronomy, astrophysics, geology, earth systems,
+     numerical, optimization, differential equations, laboratory]
+  exclude_keywords:
+    [political science, history of, literary, literature, philosophy, sociology,
+     anthropology, music theory, art history, expository writing, rhetoric,
+     spanish, french, cultural, ethics, civilization, masterpieces]

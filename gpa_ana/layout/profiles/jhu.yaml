@@ -1,0 +1,9 @@
+id: jhu
+institution: Johns Hopkins University
+handler: term_block_table
+fingerprint:
+  text_any: ["JOHNS HOPKINS UNIVERSITY", "JHED ID:"]
+code_grammar: jhu_dotted
+notes: >
+  Codes are School.Department.Course (AS.270.103); the middle segment is the
+  department (110 = Mathematics, 171 = Physics, 270 = Earth & Planetary).

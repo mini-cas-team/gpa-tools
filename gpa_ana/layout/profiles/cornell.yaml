@@ -1,0 +1,10 @@
+id: cornell
+institution: Cornell University
+handler: term_block_table
+fingerprint:
+  text_any: ["CORNELL UNIVERSITY", "Cornell NetID:"]
+code_grammar: space_suffix
+notes: >
+  ENGRI is the first-year engineering seminar sequence and counts as
+  engineering; AEM (Applied Economics and Management) sits in the business
+  school and does not.

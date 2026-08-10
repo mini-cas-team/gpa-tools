@@ -1,0 +1,11 @@
+id: umd
+institution: University of Maryland, College Park
+handler: term_block_table
+fingerprint:
+  text_any: ["UNIVERSITY OF MARYLAND, COLLEGE PARK"]
+code_grammar: space_suffix
+notes: >
+  The fingerprint names College Park in full on purpose.  Bare "UNIVERSITY OF
+  MARYLAND" is a prefix of four sibling institutions -- Baltimore, Baltimore
+  County, Eastern Shore and Global Campus -- and matching it claimed their
+  transcripts for College Park along with its department map.

@@ -1,0 +1,11 @@
+id: nyu
+institution: New York University
+handler: term_block_table
+fingerprint:
+  text_any: ["NEW YORK UNIVERSITY", "NYU N-Number:"]
+code_grammar: space_suffix
+notes: >
+  Codes carry a school suffix (CSCI-UA = Courant via the College of Arts and
+  Science).  The hyphenated prefix is a single whitespace token, so space_suffix
+  keeps "CSCI-UA" whole -- and it is kept deliberately: the same subject taught
+  through a different school is a different department here.

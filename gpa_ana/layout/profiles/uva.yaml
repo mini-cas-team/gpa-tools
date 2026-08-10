@@ -1,0 +1,8 @@
+id: uva
+institution: University of Virginia
+handler: term_block_table
+fingerprint:
+  text_any: ["UNIVERSITY OF VIRGINIA", "UVA Computing ID:"]
+code_grammar: space_suffix
+notes: >
+  ENWR is Academic and Professional Writing, not engineering.

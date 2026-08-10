@@ -1,0 +1,63 @@
+id: md_common
+institution: Maryland institution
+institution_from: first_line
+handler: term_block_table
+code_grammar: space_suffix
+fingerprint:
+  text_any:
+    - "ALLEGANY COLLEGE OF MARYLAND"
+    - "ANNE ARUNDEL COMMUNITY COLLEGE"
+    - "BALTIMORE CITY COMMUNITY COLLEGE"
+    - "BOWIE STATE UNIVERSITY"
+    - "CAPITOL TECHNOLOGY UNIVERSITY"
+    - "CARROLL COMMUNITY COLLEGE"
+    - "CECIL COLLEGE"
+    - "CHESAPEAKE COLLEGE"
+    - "COLLEGE OF SOUTHERN MARYLAND"
+    - "COMMUNITY COLLEGE OF BALTIMORE COUNTY"
+    - "COPPIN STATE UNIVERSITY"
+    - "FREDERICK COMMUNITY COLLEGE"
+    - "FROSTBURG STATE UNIVERSITY"
+    - "GOUCHER COLLEGE"
+    - "HAGERSTOWN COMMUNITY COLLEGE"
+    - "HARFORD COMMUNITY COLLEGE"
+    - "HOOD COLLEGE"
+    - "HOWARD COMMUNITY COLLEGE"
+    - "LOYOLA UNIVERSITY MARYLAND"
+    - "MARYLAND INSTITUTE COLLEGE OF ART (MICA)"
+    - "MCDANIEL COLLEGE"
+    - "MONTGOMERY COLLEGE"
+    - "MORGAN STATE UNIVERSITY"
+    - "MOUNT ST. MARY'S UNIVERSITY"
+    - "NOTRE DAME OF MARYLAND UNIVERSITY"
+    - "PRINCE GEORGE'S COMMUNITY COLLEGE"
+    - "SALISBURY UNIVERSITY"
+    - "ST. JOHN'S COLLEGE"
+    - "ST. MARY'S COLLEGE OF MARYLAND"
+    - "STEVENSON UNIVERSITY"
+    - "TOWSON UNIVERSITY"
+    - "UNIVERSITY OF BALTIMORE"
+    - "UNIVERSITY OF MARYLAND GLOBAL CAMPUS"
+    - "UNIVERSITY OF MARYLAND, BALTIMORE"
+    - "UNIVERSITY OF MARYLAND EASTERN SHORE"
+    - "WASHINGTON ADVENTIST UNIVERSITY"
+    - "WASHINGTON COLLEGE"
+    - "WOR-WIC COMMUNITY COLLEGE"
+notes: >
+  One profile for a family of Maryland institutions that print an identical
+  transcript: the same five-band header (Course/Title/Grade/Credits/Points), the
+  same printed 4.00 grading key, the same course-code shape and the same
+  eighteen department tokens, which carry the same meaning at every one of them.
+  Only the school name differs, and it is on line 1 -- so it is read from the
+  page (institution_from) rather than hardcoded, and adding a school costs one
+  fingerprint line instead of a whole file plus a duplicate ruleset block.
+
+  Fingerprints are the literal school names on purpose.  A shape-based
+  fingerprint would be shorter but would compete with the single-school
+  profiles for their own documents; naming the members keeps dispatch
+  unambiguous and makes membership an explicit decision.
+
+  Split a school out into its own profile the moment any of layout, grade
+  scale, code grammar or *department meaning* diverges -- the last is the one
+  that is a judgement call rather than an observation.  A profile of its own
+  simply lists that school's name here removed, and nothing else changes.

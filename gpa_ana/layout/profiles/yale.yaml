@@ -1,0 +1,8 @@
+id: yale
+institution: Yale University
+handler: term_block_table
+fingerprint:
+  text_any: ["YALE UNIVERSITY", "Yale NetID:"]
+code_grammar: space_suffix
+notes: >
+  Credit column is labelled "Course Credits"; one course = one credit.

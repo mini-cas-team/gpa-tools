@@ -1,0 +1,10 @@
+id: penn
+institution: University of Pennsylvania
+handler: term_block_table
+fingerprint:
+  text_any: ["UNIVERSITY OF PENNSYLVANIA", "Penn ID:"]
+code_grammar: space_suffix
+notes: >
+  One course = one course unit, so the credit column counts courses.  Penn
+  prints A+ and awards it 4.00, the same as A -- the derived scale picks this up
+  from the per-row quality points, so no profile default is needed.

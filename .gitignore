@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.venv*/
+.pytest_cache/
+
+# Analysis output and scratch space
+out/
+.work/
+
+# Claude Code: share the project's skills, keep machine-local settings out.
+# The pattern must exclude .claude's *contents* rather than .claude itself --
+# git cannot re-include a path whose parent directory is excluded, so a bare
+# ".claude/" here would make the "!" line below have no effect.
+.claude/*
+!.claude/skills/
+
+# Editor and OS cruft
+.DS_Store
+*.swp

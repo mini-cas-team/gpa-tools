@@ -1,0 +1,19 @@
+id: umbc
+institution: University of Maryland, Baltimore County
+handler: term_block_table
+fingerprint:
+  text_any: ["UNIVERSITY OF MARYLAND, BALTIMORE COUNTY"]
+  regex_any: ['^\s*UNIVERSITY OF MARYLAND, BALTIMORE COUNTY\s*$']
+code_grammar: space_suffix
+notes: >
+  UMBC uses College Park's style of department token (CMSC, AMST, STAT, PHYS)
+  rather than the shared md_common vocabulary, so it needs a map of its own --
+  AMST and STAT are exactly the tokens that went unmapped while its transcripts
+  were being claimed by the College Park profile.
+
+  The doubled fingerprint settles a prefix collision.  "UNIVERSITY OF MARYLAND,
+  BALTIMORE" is a strict prefix of this name, and that string is a md_common
+  member, so md_common also scores 10 on this page.  The anchored regex adds 8
+  more and puts this profile at 18, making dispatch decisive instead of
+  dependent on which YAML file sorts first.  The reverse cannot happen: the
+  Baltimore page never contains "BALTIMORE COUNTY".

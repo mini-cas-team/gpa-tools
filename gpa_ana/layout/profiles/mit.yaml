@@ -1,0 +1,11 @@
+id: mit
+institution: Massachusetts Institute of Technology
+handler: term_block_table
+fingerprint:
+  text_any: ["MASSACHUSETTS INSTITUTE OF TECHNOLOGY", "MIT ID:"]
+code_grammar: mit_dotted
+notes: >
+  Course numbers are School.Department.Course, so the department is the segment
+  before the first dot (6 = EECS, 8 = Physics, 18 = Mathematics).
+  MIT prints a 5.00 scale: A = 5.00. Normalisation by the printed A anchor is
+  what keeps this comparable with 4.00-scale schools.

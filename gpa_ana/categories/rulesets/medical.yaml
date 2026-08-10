@@ -1,0 +1,156 @@
+id: MEDICAL
+description: >
+  Pre-medical coursework: the science a US medical school requires and the MCAT
+  examines.
+
+notes: >
+  Judgement calls, made explicit so they can be argued with rather than
+  discovered by accident:
+
+    * The category is drawn around the four MCAT science areas -- biology and
+      biochemistry, general and organic chemistry, physics, and the
+      psychological/social foundations of behaviour.  A broader "anything a
+      medical school looks at" reading would swallow mathematics, statistics
+      and writing, which are admission requirements at many schools but would
+      leave the category too wide to rank anyone on.
+    * Psychology and sociology are therefore INCLUDED here, the opposite of the
+      STEM ruleset, which excludes both.  The MCAT devotes a quarter of its
+      sections to them.  This is the clearest example of why category is an
+      axis of its own: the same course is legitimately in one taxonomy and out
+      of another.
+    * Mathematics and statistics are excluded despite being common
+      prerequisites -- the MCAT tests neither as a section, and including them
+      would rank calculus ability as medical aptitude.
+    * Engineering is excluded throughout, including chemical and biomedical
+      engineering: the coursework is design, not medicine.  Move ENCH, 580 or
+      similar into "include" for a school to take the other view.
+    * Earth and environmental science (JHU 270, Chicago PHSC) is excluded; it
+      is science, but not medicine.
+    * Naval Academy professional coursework is excluded on the same reasoning
+      as in the STEM ruleset.
+    * "mechanics" is deliberately NOT a title keyword.  It reads as physics but
+      matches "Elementary Fluid Mechanics" and "Mechanics of Materials", and
+      those titles carry no "engineering" for the exclude list to catch first.
+      Every physics department here is mapped explicitly, so the keyword bought
+      nothing and raised eight false disputes.
+    * One dispute is left standing on purpose: Cornell CHEM 2090 "Engineering
+      General Chemistry" is mapped in while "engineering" excludes it by title.
+      The map wins and should -- it is the general chemistry sequence taught to
+      engineers, and medical schools take it as the prerequisite.
+
+  Department maps are keyed by institution because tokens collide: Caltech PH
+  is Physics while Princeton PHI is Philosophy, MIT and JHU both number their
+  departments, and Stony Brook BIO, Harvard LIFESCI, Princeton MOL and Yale
+  MCDB are all "the biology department".
+
+institutions:
+
+  harvard_college:
+    include: [LIFESCI, PSY, PHYSCI, PHYSICS, CHEM]
+    exclude: [ASTRON, COMPSCI, ECON, ENGLISH, EXPOS, GENED, GOV, HIST, HUM,
+              MATH, MUSIC, PHIL, SOCIOL, STAT]
+
+  columbia_college:
+    include: [PHYS, PSYC, BIOL, CHEM]
+    exclude: [APMA, CLCV, COMS, ECON, EESC, ENGL, FREN, HIST, HUMA, IEOR, MATH,
+              MUSI, SCNC, STAT]
+
+  mit:
+    # Course numbers are departments: 5 Chemistry, 7 Biology, 8 Physics,
+    # 9 Brain and Cognitive Sciences, 20 Biological Engineering.
+    include: ["5", "7", "8", "9", "20"]
+    exclude: ["1", "2", "3", "4", "6", "10", "11", "12", "14", "15", "16", "17",
+              "18", "21A", "21G", "21H", "21L", "21M", "21W", "22", "24"]
+
+  caltech:
+    include: [BI, CH, PH]
+    exclude: [ACM, AY, CS, EC, EE, EN, H, HUM, L, MA, MU, PS]
+
+  berkeley:
+    include: [CHEM, PHYSICS, BIOLOGY, PSYCH]
+    exclude: ["CIV ENG", DATA, ECON, EECS, ENGIN, ENGLISH, ESPM, HISTORY, MATH,
+              MUSIC, PHILOS, UGBA]
+
+  umd:
+    include: [CHEM, PHYS, PSYC, BSCI]
+    exclude: [ANTH, ARTH, CMSC, COMM, ECON, ENCH, ENEE, ENES, ENGL, ENME, GOVT,
+              HIST, MATH, MUSC]
+
+  princeton:
+    include: [MOL, NEU, CHM, PHY, PSY]
+    exclude: [ANT, ART, CBE, COS, ECO, ELE, ENG, FRE, GEO, MAE, MAT, ORF, PHI,
+              POL, WRI]
+
+  yale:
+    include: [PHYS, PSYC, MCDB, CHEM]
+    exclude: [ANTH, ASTR, CGSC, CPSC, ECON, ENAS, ENGL, EVST, FILM, GEOL, HIST,
+              HSAR, LING, MATH, MUSI, PHIL, PLSC, "S&DS", SOCY, SPAN]
+
+  stanford:
+    include: [CHEM, PHYSICS, PSYCH, BIO]
+    exclude: [ARTHIST, CEE, COMM, CS, EARTHSYS, ECON, EE, HISTORY, MATH, ME,
+              "MS&E", MUSIC, PHIL, POLISCI, PWR, STATS, THINK]
+
+  jhu:
+    # Middle segment of AS.nnn.nnn is the department.
+    include: ["020", "030", "171", "200"]
+    exclude: ["060", "100", "110", "180", "270", "376", "500"]
+
+  nyu:
+    include: [BIOL-UA, CHEM-UA, PHYS-UA, PSYCH-UA, SOC-UA]
+    exclude: [CORE-UA, CSCI-UA, ECON-UA, EXPOS-UA, HIST-UA, MATH-UA, MUSIC-UA]
+
+  chicago:
+    include: [BIOS, CHEM, PHYS, PSYC]
+    exclude: [CMSC, ECON, HIST, HUMA, MATH, MUSI, PHSC, SOSC, STAT]
+
+  stony_brook:
+    include: [BIO, CHE, PHY, PSY]
+    exclude: [AMS, CSE, ECO, HIS, MUS, POL, WRT]
+
+  cornell:
+    include: [CHEM, PHYS, PSYCH]
+    exclude: [AEM, CS, ECON, ENGRI, HIST, MATH, MUSIC]
+
+  usna:
+    include: [SC, SP]
+    exclude: [EE, EM, EN, ES, FP, HH, NE, NL, NS, SI, SM]
+
+  uva:
+    include: [BIOL, CHEM, PHYS, PSYC]
+    exclude: [CS, ECON, ENWR, HIST, MATH, MUSI, STAT]
+
+  penn:
+    include: [BIOL, CHEM, PHYS, PSYC]
+    exclude: [CIS, ECON, HIST, MATH, MUSC, PHIL, WRIT]
+
+  umbc:
+    include: [BIOL, CHEM, PHYS, PSYC]
+    exclude: [AMST, CMSC, ECON, ENGL, HIST, MATH, MUSC, STAT]
+
+  md_common:
+    # BIOL here is "Human Anatomy and Physiology", squarely pre-medical.
+    include: [BIOL, CHEM, PSYC, SOCI]
+    exclude: [ART, BUSN, COMM, CSCI, ECON, ENGL, GEOG, HIST, MATH, MUSC, PHED,
+              PHIL, POLS, SPAN]
+
+# Used only when no institution profile claimed the document.
+generic_include:
+  [BIO, BIOL, BIOLOGY, BIOS, BIOSCI, LIFESCI, MCDB, MOL, MICRB, ANAT, ANATOMY,
+   PHYSIO, PHYSIOLOGY, NEURO, NEUROSCI, NEU, BIOCHEM, CHEM, CHEMISTRY, CHM,
+   PHYS, PHYSICS, PHY, PSYC, PSYCH, PSYCHOLOGY, PSY, SOC, SOCI, SOCIOLOGY,
+   PUBH, HLTH, NURS, KINES]
+
+# Advisory only: keywords never override an explicit department mapping, they
+# raise a "disputed" flag so a wrong map surfaces instead of hiding.
+title_audit:
+  include_keywords:
+    [anatomy, physiology, biology, biological, molecular, cell biology,
+     genetics, microbiology, immunology, biochemistry, organic chemistry,
+     chemistry, chemical principles, physics, neuroscience,
+     neuroanatomy, pathology, pharmacology, epidemiology, public health,
+     nutrition, psychology, psychological, sociology, human development]
+  exclude_keywords:
+    [engineering, programming, algorithm, calculus, linear algebra, topology,
+     art history, music theory, political science, literature, expository
+     writing, rhetoric, marketing, accounting, civilization, masterpieces]

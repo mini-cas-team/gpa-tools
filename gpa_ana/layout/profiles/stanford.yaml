@@ -1,0 +1,9 @@
+id: stanford
+institution: Stanford University
+handler: term_block_table
+fingerprint:
+  text_any: ["STANFORD UNIVERSITY", "SUID:"]
+code_grammar: space_suffix
+notes: >
+  Quarter system (Autumn/Winter/Spring), units rather than semester hours.
+  MS&E keeps its ampersand through the space_suffix grammar.
