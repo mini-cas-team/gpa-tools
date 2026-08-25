@@ -4,7 +4,7 @@
 # category   : which course taxonomy to rank on (see gpa_ana/categories/rulesets/)
 
 pdf-folder: /home/personal/Templates/transcripts
-category: [STEM, MEDICAL] # one or more; every listed category is ranked in the same run
+category: [STEM, MEDICAL, LAW] # one or more; every listed category is ranked in the same run
 
 # --- optional settings (defaults shown) -------------------------------------
 out-folder: /home/personal/Templates/out # where results are written

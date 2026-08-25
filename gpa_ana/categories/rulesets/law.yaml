@@ -1,0 +1,197 @@
+id: LAW
+description: >
+  Pre-law coursework: the reading, reasoning, writing and institutional study
+  that law school admissions and the LSAT reward.
+
+notes: >
+  Judgement calls, made explicit so they can be argued with rather than
+  discovered by accident:
+
+    * The category is drawn around what the LSAT and the first year of law
+      school actually test -- formal and informal logic, close reading of dense
+      argumentative text, written argument, and the institutions law operates
+      on.  That makes philosophy, political science/government, history,
+      English and writing/rhetoric the spine, with sociology, anthropology and
+      American studies included as the study of the norms and institutions law
+      acts upon.  There is no "pre-law requirement" to copy the way MEDICAL
+      copies the MCAT, so the line is drawn on skills and subject matter.
+    * Economics is EXCLUDED, and this is the closest call in the file.  It is
+      one of the most common pre-law majors and law-and-economics is a real
+      field, but the coursework in this corpus is quantitative modelling --
+      Chicago's four-course Elements of Economic Analysis, Penn and UVa's
+      econometrics sequences, game theory.  Including it would rank modelling
+      ability as legal aptitude and would swallow whole economics majors.  Move
+      ECON into a school's "include" to take the other view.
+    * Psychology is excluded, as in STEM and unlike MEDICAL: it is here for the
+      MCAT's sake there, and nothing equivalent pulls it in for law.
+      Linguistics is excluded too, despite Yale's syntax/semantics courses
+      neighbouring formal logic -- it is cognitive science, and the logic that
+      matters is taught in philosophy departments, which are mapped in.
+    * Elementary foreign language (Columbia FREN, MIT 21G, Yale SPAN) is
+      excluded: language acquisition, not textual analysis.  Literature *in*
+      English is included -- Caltech "Major British Authors", md_common
+      "American Literature I" -- because close reading of argument is the
+      skill the LSAT's reading comprehension section measures.
+    * Speech and communication (UMD COMM, md_common "Fundamentals of Speech")
+      is excluded.  Oral advocacy is a lawyer's skill, but these are
+      general-education public-speaking courses, not argumentation.
+    * General-education departments are judged on whether the *whole
+      department* sits in the category, because the token cannot see the
+      course.  Bounded cores are included: Columbia CLCV "Contemporary
+      Civilization" (political philosophy), Chicago SOSC (social and political
+      thought) and Chicago HUMA (text-based literature core), Caltech Hum.
+      Cores that span every subject are excluded: Harvard GENED, Stanford
+      THINK and NYU CORE-UA all run science offerings under the same token.
+      Columbia HUMA is excluded on the same reasoning one level down -- it
+      covers Masterpieces of Western Art and of Western Music as well as of
+      Literature and Philosophy, and only the last is pre-law.
+    * Naval Academy professional coursework (NS, NL) is excluded, consistent
+      with STEM and MEDICAL, even though NS "Leadership and Law" is literally
+      a law course and NL "Ethics and Moral Reasoning for the Naval Leader"
+      is moral philosophy.  It is military training rather than an academic
+      department.  USNA's academic humanities -- EN (rhetoric and literature),
+      HH (history), FP (political science) -- are included normally.
+    * "ethics" and "history of" are deliberately NOT title keywords, on the
+      rule that a keyword aimed at a subject the maps already cover can only
+      produce noise.  Every philosophy and history department in the corpus is
+      mapped, while "ethics" matched the excluded USNA NL leadership course and
+      "history of" matched Chicago PHSC "Environmental History of the Earth",
+      UVa MUSI "History of Jazz Music" and Stanford ARTHIST "Introduction to
+      the History of Art" -- three false disputes and no true ones.
+
+  One dispute is left standing on purpose: USNA NS "Leadership and Law" is
+  mapped out while the "law" keyword reads it in.  The keyword is worth keeping
+  for unmapped schools, and the flag is the correct place for that argument to
+  surface rather than a reason to change the map.
+
+  Department maps are keyed by institution because tokens collide: Princeton
+  ENG is English while ENG elsewhere is engineering, Caltech PS is Political
+  Science, Harvard HUM is the humanities core while UMBC AMST is American
+  Studies, and MIT and JHU number their departments (MIT 17 Political Science,
+  21H History, 21L Literature, 24 Linguistics and Philosophy; JHU 060 English,
+  100 History, 150 Philosophy, 190 Political Science).
+
+institutions:
+
+  harvard_college:
+    include: [HIST, PHIL, EXPOS, GOV, ENGLISH, HUM, SOCIOL]
+    exclude: [ASTRON, CHEM, COMPSCI, ECON, GENED, LIFESCI, MATH, MUSIC,
+              PHYSCI, PHYSICS, PSY, STAT]
+
+  columbia_college:
+    include: [CLCV, ENGL, HIST, PHIL, POLS, SOCI, ANTH]
+    exclude: [APMA, ARTH, BIOL, CHEM, COMS, ECON, EESC, FREN, HUMA, IEOR,
+              MATH, MUSI, PHYS, PSYC, SCNC, SPAN, STAT]
+
+  mit:
+    # Course numbers are departments: 17 Political Science, 21H History,
+    # 21L Literature, 21W Writing, 24 Linguistics and Philosophy.
+    include: ["17", "21A", "21H", "21L", "21W", "24"]
+    exclude: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12",
+              "14", "15", "16", "18", "20", "21G", "21M", "22"]
+
+  caltech:
+    # PS = Political Science at Caltech; H = History, Hum = the humanities core.
+    include: [EN, H, HUM, PS]
+    exclude: [ACM, AY, BI, CH, CS, EC, EE, L, MA, MU, PH]
+
+  berkeley:
+    include: [ENGLISH, HISTORY, PHILOS]
+    exclude: [BIOLOGY, CHEM, "CIV ENG", DATA, ECON, EECS, ENGIN, ESPM, MATH,
+              MUSIC, PHYSICS, PSYCH, UGBA]
+
+  umd:
+    include: [ENGL, HIST, GOVT, ANTH]
+    exclude: [ARTH, BSCI, CHEM, CMSC, COMM, ECON, ENCH, ENEE, ENES, ENME,
+              MATH, MUSC, PHYS, PSYC]
+
+  princeton:
+    # ENG = English at Princeton.
+    include: [ENG, PHI, POL, WRI, ANT]
+    exclude: [ART, CBE, CHM, COS, ECO, ELE, FRE, GEO, MAE, MAT, MOL, MUS,
+              NEU, ORF, PHY, PSY]
+
+  yale:
+    include: [ENGL, HIST, PHIL, PLSC, ANTH, SOCY]
+    exclude: [ASTR, CGSC, CHEM, CPSC, ECON, ENAS, EVST, FILM, GEOL, HSAR,
+              LING, MATH, MCDB, MUSI, PHYS, PSYC, "S&DS", SPAN]
+
+  stanford:
+    include: [HISTORY, PHIL, POLISCI, PWR]
+    exclude: [ARTHIST, BIO, CEE, CHEM, COMM, CS, EARTHSYS, ECON, EE, MATH,
+              ME, "MS&E", MUSIC, PHYSICS, PSYCH, STATS, THINK]
+
+  jhu:
+    # Middle segment of AS.nnn.nnn is the department: 060 English,
+    # 070 Anthropology, 100 History, 150 Philosophy, 190 Political Science.
+    include: ["060", "070", "100", "150", "190", "191", "230"]
+    exclude: ["010", "020", "030", "061", "110", "171", "180", "200", "250",
+              "270", "271", "376", "500", "540", "580", "601"]
+
+  nyu:
+    include: [EXPOS-UA, HIST-UA, SOC-UA]
+    exclude: [BIOL-UA, CHEM-UA, CORE-UA, CSCI-UA, ECON-UA, MATH-UA, MUSIC-UA,
+              PHYS-UA, PSYCH-UA]
+
+  chicago:
+    include: [HIST, HUMA, SOSC]
+    exclude: [BIOS, CHEM, CMSC, ECON, MATH, MUSI, PHSC, PHYS, PSYC, STAT]
+
+  stony_brook:
+    include: [HIS, POL, WRT]
+    exclude: [AMS, BIO, CHE, CSE, ECO, MUS, PHY, PSY]
+
+  cornell:
+    include: [HIST]
+    exclude: [AEM, CHEM, CS, ECON, ENGRI, MATH, MUSIC, PHYS, PSYCH]
+
+  usna:
+    # EN = English (rhetoric and literature), FP = Political Science,
+    # HH = History.  NS/NL are professional military coursework.
+    include: [EN, FP, HH]
+    exclude: [EE, EM, ES, NE, NL, NS, SC, SI, SM, SP]
+
+  uva:
+    include: [HIST, ENWR]
+    exclude: [BIOL, CHEM, CS, ECON, MATH, MUSI, PHYS, PSYC, STAT]
+
+  penn:
+    include: [HIST, PHIL, WRIT]
+    exclude: [BIOL, CHEM, CIS, ECON, MATH, MUSC, PHYS, PSYC]
+
+  umbc:
+    # AMST is American Studies -- an interdisciplinary humanities department,
+    # not the American-history survey.
+    include: [AMST, ENGL, HIST]
+    exclude: [BIOL, CHEM, CMSC, ECON, MATH, MUSC, PHYS, PSYC, STAT]
+
+  md_common:
+    # One block for the whole shared-format Maryland family.  GEOG is "World
+    # Regional Geography" -- regional description, not political geography.
+    include: [ENGL, HIST, PHIL, POLS, SOCI]
+    exclude: [ART, BIOL, BUSN, CHEM, COMM, CSCI, ECON, GEOG, MATH, MUSC,
+              PHED, PSYC, SPAN]
+
+# Used only when no institution profile claimed the document.  Bare EN, ENG,
+# PS and H are deliberately absent: they mean English/Political Science/History
+# at exactly the schools that already have blocks, and engineering or physical
+# science at most others.
+generic_include:
+  [PHIL, PHILOS, PHILOSOPHY, PHI, LOGIC, POLISCI, POLSCI, "POL SCI", POLS,
+   POL, PLSC, PLAP, POLI, GOVT, GOV, HIST, HISTORY, HIS, ENGL, ENGLISH, LIT,
+   LITR, CLAS, CLASSICS, CLCV, RHET, RHETOR, WRIT, WRITING, WRT, EXPOS, ENWR,
+   PWR, LAW, LEGAL, LEGALST, CRIM, CRJ, CJUS, SOC, SOCI, SOCIOL, SOCY, ANTH,
+   ANT, AMST, HUMA, HUM]
+
+# Advisory only: keywords never override an explicit department mapping, they
+# raise a "disputed" flag so a wrong map surfaces instead of hiding.
+title_audit:
+  include_keywords:
+    [law, legal, constitution, jurisprudence, logic, political science,
+     political theory, political thought, government, rhetoric, argumentation,
+     criminology, criminal justice, civil liberties, civilization, public
+     policy]
+  exclude_keywords:
+    [calculus, algebra, chemistry, physics, biology, molecular, programming,
+     algorithm, laboratory, econometrics, microeconomics, macroeconomics,
+     engineering, music theory, art history, thermodynamic, circuits]

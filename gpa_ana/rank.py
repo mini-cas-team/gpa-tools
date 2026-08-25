@@ -39,6 +39,8 @@ class StudentResult:
     category: str
     category_courses: int = 0
     category_credits: float = 0.0
+    total_courses: int = 0
+    category_course_pct: float | None = None
     gpa_raw: float | None = None
     gpa_capped: float | None = None
     overall_gpa_capped: float | None = None
@@ -104,6 +106,8 @@ def summarise(transcript: Transcript, category: str) -> StudentResult:
     capped = _weighted([(min(g * factor, CAP), c) for g, c in in_category])
     overall = _weighted([(min(g * factor, CAP), c) for g, c in everything])
 
+    total_courses = len(everything)
+
     result = StudentResult(
         student=transcript.student or transcript.file,
         file=transcript.file,
@@ -113,6 +117,10 @@ def summarise(transcript: Transcript, category: str) -> StudentResult:
         category=category,
         category_courses=len(in_category),
         category_credits=sum(c for _, c in in_category),
+        total_courses=total_courses,
+        category_course_pct=(
+            round(100.0 * len(in_category) / total_courses, 2) if total_courses else None
+        ),
         gpa_raw=_round(raw),
         gpa_capped=_round(capped),
         overall_gpa_capped=_round(overall),

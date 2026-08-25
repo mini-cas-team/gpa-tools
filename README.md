@@ -163,6 +163,12 @@ gate does not exist and is reported as `none`, not as a pass.
 detail in `out/extracted/*.courses.json` with full provenance (file, page,
 line) for every row.
 
+Alongside the category GPA each row carries `all_courses_GPA` (the same capped
+average over every GPA-bearing course on the transcript), `total_courses`, and
+`<id>_all_pct` — the category's share of those courses. All three count only
+courses that carry a usable grade and count toward GPA, so the share is over
+the same population the two averages are computed from.
+
 Every student is ranked by one rule: **capped** GPA. Each course is rescaled so
 a plain A is worth 4.00 at every school, then capped at 4.00.
 

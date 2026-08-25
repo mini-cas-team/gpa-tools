@@ -81,16 +81,18 @@ def write_outputs(
         writer.writerow(
             [
                 "rank", "student", "institution", "program",
-                f"{category}_GPA",
-                f"{slug}_courses", "gate", "file",
+                f"{category}_GPA", "all_courses_GPA",
+                f"{slug}_courses", "total_courses", f"{slug}_all_pct",
+                "gate", "file",
             ]
         )
         for position, r in enumerate(ranked, start=1):
             writer.writerow(
                 [
                     position, r.student, r.institution, r.program,
-                    r.gpa_capped,
-                    r.category_courses, r.gate, r.file,
+                    r.gpa_capped, r.overall_gpa_capped,
+                    r.category_courses, r.total_courses, r.category_course_pct,
+                    r.gate, r.file,
                 ]
             )
 
