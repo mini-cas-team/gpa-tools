@@ -106,3 +106,9 @@ def load_ruleset(name: str, directory: Path | None = None) -> Ruleset:
     raw = yaml.safe_load(path.read_text()) or {}
     raw.setdefault("id", name)
     return Ruleset(**raw)
+
+
+def available_categories(directory: Path | None = None) -> list[str]:
+    """Category ids a run can ask for: one per ruleset YAML, in id order."""
+    directory = directory or RULESET_DIR
+    return sorted(p.stem.upper() for p in directory.glob("*.yaml"))

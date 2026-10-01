@@ -1,0 +1,271 @@
+{% extends "base.html" %}
+
+{% block title %}gpa-ana — view{% endblock %}
+
+{% block body %}
+<form id="view-form" method="get" action="/view" class="view-controls">
+  <div class="grow">
+    <label for="folder">Results folder</label>
+    <input type="text" id="folder" name="folder" value="{{ folder }}">
+  </div>
+  <div>
+    <label for="category">Category</label>
+    <select id="category" name="category" {% if not categories %}disabled{% endif %}>
+      {% for name in categories %}
+        <option value="{{ name }}" {% if name == selected %}selected{% endif %}>{{ name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit">Load</button>
+</form>
+
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+{% if ranking %}
+  {% set slug = selected|lower %}
+  <h2>{{ ranking.category }}</h2>
+  <p class="hint" style="margin-top:-.4rem">
+    Ranked by average {{ ranking.category }} GPA, rescaled so A = 4.00 everywhere,
+    then capped at 4.00. Read from <code>{{ folder }}/rank_{{ slug }}_gpa.json</code>.
+    Click a column name to sort; click a student to see their transcript.
+  </p>
+
+  {% if ranking.ranked %}
+  {% macro num(value, digits) -%}
+    <td class="num" data-sort="{{ value if value is not none else '' }}">
+      {{- ('%.' ~ digits ~ 'f')|format(value) if value is not none else '–' -}}
+    </td>
+  {%- endmacro %}
+  <div class="table-wrap scroll">
+  <table id="ranking">
+    <thead>
+      <tr>
+        <th class="num" data-type="num" aria-sort="ascending"><button type="button" class="sort">#</button></th>
+        <th><button type="button" class="sort">Student</button></th>
+        <th><button type="button" class="sort">Institution</button></th>
+        <th><button type="button" class="sort">Program</button></th>
+        <th class="num" data-type="num"><button type="button" class="sort">{{ ranking.category }} GPA</button></th>
+        <th class="num" data-type="num"><button type="button" class="sort">All-courses GPA</button></th>
+        <th class="num" data-type="num"><button type="button" class="sort">{{ ranking.category }} courses</button></th>
+        <th class="num" data-type="num"><button type="button" class="sort">Total courses</button></th>
+        <th class="num" data-type="num"><button type="button" class="sort">%</button></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in ranking.ranked %}
+      <tr class="student" tabindex="0" data-file="{{ r.file }}">
+        {{ num(r.rank, 0) }}
+        <td>{{ r.student }}</td>
+        <td>{{ r.institution or '' }}</td>
+        <td>{{ r.program or '' }}</td>
+        <td class="num" data-sort="{{ r.gpa_capped }}"><strong>{{ '%.3f'|format(r.gpa_capped) }}</strong></td>
+        {{ num(r.overall_gpa_capped, 3) }}
+        {{ num(r.category_courses, 0) }}
+        {{ num(r.total_courses, 0) }}
+        {{ num(r.category_course_pct, 1) }}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="row-tip" id="row-tip" role="tooltip" hidden>Click the row to view student transcript details</div>
+  {% else %}
+  <p class="panel">No student could be ranked in this category.</p>
+  {% endif %}
+
+  {% if ranking.held_back %}
+    <h3>Held back (not ranked)</h3>
+    <div class="panel">
+      <ul class="notes">
+        {% for h in ranking.held_back %}
+          <li><strong>{{ h.student }}</strong> ({{ h.file }}) — {{ h.reason }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+{% endif %}
+
+<dialog id="courses-dialog" aria-labelledby="courses-title">
+  <div class="dialog-head">
+    <div>
+      <h2 id="courses-title"></h2>
+      <p class="hint" id="courses-meta"></p>
+    </div>
+    <button type="button" class="close" aria-label="Close">×</button>
+  </div>
+  <div class="dialog-body">
+    <section class="pdf-pane" id="pdf-pane" aria-label="Original transcript"></section>
+    <section class="courses-pane" id="courses-pane" aria-label="Extracted courses"></section>
+  </div>
+</dialog>
+
+<script>
+(() => {
+  // Picking a category is the whole interaction, so load it straight away.
+  document.getElementById("category").addEventListener("change", (e) => e.target.form.submit());
+
+  const table = document.getElementById("ranking");
+  if (!table) return;
+
+  // ---- sorting ------------------------------------------------------------
+  const headers = [...table.tHead.rows[0].cells];
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+  function sortBy(index) {
+    const th = headers[index];
+    const numeric = th.dataset.type === "num";
+    // First click: numbers high-to-low except rank, text A-Z; then toggle.
+    const current = th.getAttribute("aria-sort");
+    const direction = current
+      ? (current === "ascending" ? "descending" : "ascending")
+      : (numeric && index !== 0 ? "descending" : "ascending");
+    const sign = direction === "ascending" ? 1 : -1;
+
+    const key = (row) => {
+      const cell = row.cells[index];
+      return numeric ? cell.dataset.sort : cell.textContent.trim();
+    };
+    const body = table.tBodies[0];
+    const rows = [...body.rows];
+    rows.sort((a, b) => {
+      const x = key(a), y = key(b);
+      // Blanks sort last whichever way the column runs.
+      if (x === "" || y === "") return (x === "") - (y === "");
+      const order = numeric ? Number(x) - Number(y) : collator.compare(x, y);
+      return sign * order || Number(a.cells[0].dataset.sort) - Number(b.cells[0].dataset.sort);
+    });
+    body.append(...rows);
+
+    headers.forEach((h) => h.removeAttribute("aria-sort"));
+    th.setAttribute("aria-sort", direction);
+  }
+
+  headers.forEach((th, index) => {
+    th.querySelector("button.sort").addEventListener("click", () => sortBy(index));
+  });
+
+  // ---- hover hint over the data rows (not the header) ---------------------
+  const tip = document.getElementById("row-tip");
+  const rowsBody = table.tBodies[0];
+  rowsBody.addEventListener("mousemove", (e) => {
+    tip.hidden = false;
+    // Below-right of the pointer, flipped to stay inside the window.
+    const x = e.clientX + 14, y = e.clientY + 18;
+    const flipX = x + tip.offsetWidth > window.innerWidth - 8;
+    const flipY = y + tip.offsetHeight > window.innerHeight - 8;
+    tip.style.left = `${flipX ? e.clientX - tip.offsetWidth - 10 : x}px`;
+    tip.style.top = `${flipY ? e.clientY - tip.offsetHeight - 10 : y}px`;
+  });
+  rowsBody.addEventListener("mouseleave", () => { tip.hidden = true; });
+
+  // ---- student dialog -----------------------------------------------------
+  const dialog = document.getElementById("courses-dialog");
+  const title = document.getElementById("courses-title");
+  const meta = document.getElementById("courses-meta");
+  const pdfPane = document.getElementById("pdf-pane");
+  const coursesPane = document.getElementById("courses-pane");
+  const folder = {{ folder|string|tojson }};
+  const category = {{ selected|tojson }};
+
+  dialog.querySelector(".close").addEventListener("click", () => dialog.close());
+  // A click on the backdrop lands on the dialog element itself.
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
+  // Unload the PDF on close so the next student never flashes the last one.
+  dialog.addEventListener("close", () => pdfPane.replaceChildren());
+
+  // textContent throughout: course titles and names come from PDFs.
+  function el(tag, text, className) {
+    const node = document.createElement(tag);
+    if (text !== undefined && text !== null) node.textContent = text;
+    if (className) node.className = className;
+    return node;
+  }
+  const fmt = (n, digits) => (n === null || n === undefined ? "–" : Number(n).toFixed(digits));
+
+  function renderPdf(record) {
+    if (!record.pdf_url) {
+      pdfPane.replaceChildren(el("div",
+        `The original PDF (${record.file}) was not found in the folder this run read from.`, "error"));
+      return;
+    }
+    const frame = el("iframe");
+    frame.src = record.pdf_url;
+    frame.title = `${record.student} — ${record.file}`;
+    const link = el("a", "Open in a new tab");
+    link.href = record.pdf_url;
+    link.target = "_blank";
+    link.rel = "noopener";
+    const caption = el("p", null, "hint");
+    caption.style.margin = "0 0 .5rem";
+    caption.append(`${record.file} · `, link);
+    pdfPane.replaceChildren(caption, frame);
+  }
+
+  function renderCourses(record) {
+    const courses = record.courses || [];
+    if (!courses.length) {
+      coursesPane.replaceChildren(el("p", "No courses were extracted from this transcript.", "panel"));
+      return;
+    }
+    const tbl = el("table", null, "courses");
+    const head = tbl.createTHead().insertRow();
+    for (const [label, cls] of [["Term"], ["Code"], ["Title"], ["Grade"],
+        [record.credit_label || "Credits", "num"], ["Points (4.0)", "num"], [category], ["In GPA"]]) {
+      head.append(el("th", label, cls));
+    }
+    const tbody = tbl.createTBody();
+    let lastTerm = null;
+    for (const c of courses) {
+      const row = tbody.insertRow();
+      if (c.in_category) row.className = "in-category";
+      // Show each term once, at the first course in it.
+      row.append(el("td", c.term === lastTerm ? "" : c.term, "term"));
+      lastTerm = c.term;
+      row.append(el("td", c.code, "code"), el("td", c.title), el("td", c.grade),
+        el("td", fmt(c.credits, 1), "num"), el("td", fmt(c.grade_points_4pt, 2), "num"),
+        el("td", c.in_category ? "✓" : ""), el("td", c.counts_toward_gpa ? "✓" : "no"));
+    }
+    const wrap = el("div", null, "table-wrap scroll");
+    wrap.append(tbl);
+    coursesPane.replaceChildren(wrap);
+  }
+
+  async function open(row) {
+    tip.hidden = true;
+    title.textContent = row.cells[1].textContent;
+    meta.textContent = "";
+    pdfPane.replaceChildren(el("p", "Loading…", "hint"));
+    coursesPane.replaceChildren();
+    dialog.showModal();
+    try {
+      const query = new URLSearchParams({ folder, category, file: row.dataset.file });
+      const response = await fetch(`/view/courses?${query}`);
+      const data = await response.json().catch(() => ({ error: `server returned ${response.status}` }));
+      if (!response.ok) throw new Error(data.error || `server returned ${response.status}`);
+
+      title.textContent = data.student;
+      meta.textContent = [
+        data.institution, data.program,
+        `${category} GPA ${fmt(data.gpa_capped, 3)}`,
+        `all courses ${fmt(data.overall_gpa_capped, 3)}`,
+        `${data.category_courses} of ${data.total_courses} courses in ${category}`,
+      ].filter(Boolean).join(" · ");
+      renderPdf(data);
+      renderCourses(data);
+    } catch (err) {
+      pdfPane.replaceChildren();
+      coursesPane.replaceChildren(el("div", `Error: ${err.message}`, "error"));
+    }
+  }
+
+  table.tBodies[0].addEventListener("click", (e) => {
+    const row = e.target.closest("tr.student");
+    if (row) open(row);
+  });
+  table.tBodies[0].addEventListener("keydown", (e) => {
+    const row = e.target.closest("tr.student");
+    if (row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); open(row); }
+  });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block title %}gpa-ana — help{% endblock %}
+
+{% block body %}
+<div class="help">
+  <p>gpa-ana reads student transcript PDFs, works out each student's GPA over the
+    courses in a category (STEM, MEDICAL, LAW, …), and ranks the students by it.
+    Use the two tabs in order: <strong>Run</strong> to analyse transcripts and save the
+    results, then <strong>View</strong> to look at them.</p>
+
+  <h2>1. Run — load PDF transcripts and save results</h2>
+  <ol>
+    <li><strong>PDF input:</strong> upload one or more transcript PDFs, or type the path
+      of a folder on this computer that holds them. If you do both, the uploads are used.</li>
+    <li><strong>Output path:</strong> the folder to save results in. It is created if it
+      does not exist.</li>
+    <li><strong>Categories:</strong> tick every category to rank. Each one gets its own
+      ranking from the same read of the PDFs.</li>
+    <li><strong>Options</strong> (usually left alone):
+      <em>Minimum category courses</em> holds back students with fewer courses than this
+      in a category; <em>Workers</em> is how many PDFs are read at once (blank = automatic);
+      <em>Force OCR</em> reads every page as an image, for scanned transcripts.</li>
+    <li>Click <strong>Run analysis</strong>. The status appears at the bottom of the page —
+      a running timer, then a summary of what was ranked and where it was saved, or the
+      error if something went wrong.</li>
+  </ol>
+  <p class="hint">Each category saves <code>rank_&lt;category&gt;_gpa.csv</code> and
+    <code>.json</code> in the output folder; the CSV opens in any spreadsheet.</p>
+
+  <h2>2. View — see each category's results</h2>
+  <ol>
+    <li><strong>Results folder</strong> starts on the folder the last run saved to.
+      Type another folder and click <strong>Load</strong> to open older results.</li>
+    <li><strong>Category:</strong> pick one to show its ranking. Only categories that
+      have results in that folder are listed.</li>
+    <li>Click any <strong>column name</strong> to sort by it; click again to reverse.</li>
+    <li>Click a <strong>student's row</strong> to open their transcript details: the
+      original PDF on the left, and every course read from it on the right. Courses in
+      bold, marked ✓, count toward the category. Close it with ×, Esc, or a click outside.</li>
+    <li>Students listed under <strong>Held back</strong> were not ranked; the reason is
+      shown next to each name.</li>
+  </ol>
+</div>
+{% endblock %}

@@ -96,6 +96,35 @@ Each category prints its own ranked table and writes
 warnings are reported once for the run, since they describe the parse rather
 than the taxonomy.
 
+### 4. Or do it in a browser
+
+```bash
+.venv312/bin/pip install Flask        # only the web UI needs it
+.venv312/bin/python -m gpa_ana.web    # http://127.0.0.1:5000
+```
+
+The form takes a **PDF input** -- either uploaded files or a folder path on this
+machine -- an **output path**, and which categories to rank. `config.yaml`
+prefills it when there is one, so the usual run is one click. Results come back
+as ranked tables per category, with the held-back list, the gate tally, parse
+warnings and CSV/JSON download links.
+
+| flag | |
+|---|---|
+| `-c PATH` | config to prefill the form from (default `config.yaml`) |
+| `--host` / `--port` | bind address, default `127.0.0.1:5000` |
+| `--debug` | Flask reloader and tracebacks |
+
+Both front ends call the same `service.analyse`, so the browser cannot drift
+from the CLI -- `tests/test_web.py` pins that by diffing the CSV the two produce
+from identical inputs.
+
+**This is a localhost tool for one operator.** The folder fields are real server
+paths, which is the point -- it reads a transcript folder already on the machine
+and writes results next to it. Flask's development server is what `--host`
+binds, and neither it nor the path fields belong on a network without
+authentication and a path allowlist in front of them.
+
 ## Design: two independent axes
 
 Parsing ends at a canonical `Course` record; categorisation begins from it.

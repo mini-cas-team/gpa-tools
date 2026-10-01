@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+
+{% block body %}
+<form id="run-form" method="post" action="/run" enctype="multipart/form-data">
+
+  <fieldset>
+    <legend>PDF input</legend>
+
+    <label for="pdfs">Upload transcripts</label>
+    <input type="file" id="pdfs" name="pdfs" accept="application/pdf,.pdf" multiple>
+
+    <label for="pdf_folder">…or a folder on this machine</label>
+    <input type="text" id="pdf_folder" name="pdf_folder"
+           value="{{ defaults.pdf_folder }}"
+           placeholder="/path/to/transcripts">
+    <p class="hint">Uploads win if both are given. A folder is read non-recursively
+      (<code>*.pdf</code>), which is how the CLI reads one too.</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Output path</legend>
+    <label for="out_folder">Results folder</label>
+    <input type="text" id="out_folder" name="out_folder"
+           value="{{ defaults.out_folder }}"
+           placeholder="/path/to/out" required>
+    <p class="hint">Created if missing. Each category writes
+      <code>rank_&lt;id&gt;_gpa.csv</code>, <code>rank_&lt;id&gt;_gpa.json</code> and
+      <code>extracted/&lt;student&gt;.&lt;id&gt;.courses.json</code> here, plus
+      <code>sources.json</code> (where the PDFs are) and, for uploads, a copy of them
+      in <code>pdfs/</code> so View can show the originals.</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Categories</legend>
+    <div class="inline">
+      {% for name in categories %}
+        <label>
+          <input type="checkbox" name="categories" value="{{ name }}"
+            {% if name in defaults.categories %}checked{% endif %}>
+          {{ name }}
+        </label>
+      {% endfor %}
+    </div>
+    <p class="hint">Each PDF is parsed once; every category selected is ranked off
+      that one parse. A course can belong to several at a time.</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Options</legend>
+    <div class="inline">
+      <label>
+        Minimum category courses
+        <input type="number" name="min_courses" min="0" style="width:5rem"
+               value="{{ defaults.min_category_courses }}">
+      </label>
+      <label>
+        Workers
+        <input type="number" name="jobs" min="0" style="width:5rem" placeholder="auto">
+      </label>
+      <label>
+        <input type="checkbox" name="force_ocr">
+        Force OCR
+      </label>
+    </div>
+    <p class="hint">Students below the course minimum are held back with a stated
+      reason, never dropped silently. Force OCR ignores any embedded text layer.</p>
+  </fieldset>
+
+  <button type="submit">Run analysis</button>
+</form>
+
+<div id="status" class="status" role="status" aria-live="polite" hidden></div>
+
+<script>
+(() => {
+  const form = document.getElementById("run-form");
+  const button = form.querySelector("button[type=submit]");
+  const status = document.getElementById("status");
+
+  // Built with textContent throughout: messages carry file names and paths.
+  function show(kind, title, lines = []) {
+    const box = document.createElement("div");
+    box.className = kind;
+    const head = document.createElement("strong");
+    head.textContent = title;
+    box.append(head);
+    if (lines.length) {
+      const list = document.createElement("ul");
+      list.className = "notes";
+      for (const line of lines) {
+        const item = document.createElement("li");
+        item.textContent = line;
+        list.append(item);
+      }
+      box.append(list);
+    }
+    status.replaceChildren(box);
+    status.hidden = false;
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    button.disabled = true;
+
+    const started = Date.now();
+    const elapsed = () => Math.round((Date.now() - started) / 1000);
+    show("running", "Running… 0s");
+    const timer = setInterval(() => show("running", `Running… ${elapsed()}s`), 1000);
+
+    try {
+      const response = await fetch(form.action, { method: "POST", body: new FormData(form) });
+      let data;
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error(`server returned ${response.status} ${response.statusText}`);
+      }
+      clearInterval(timer);
+
+      if (!data.ok) {
+        show("error", `Error: ${data.error}`);
+        return;
+      }
+      const lines = [
+        `Parsed ${data.parsed} of ${data.pdf_count} PDF(s) from ${data.source}`,
+        ...data.categories.map(c => `${c.name}: ${c.ranked} ranked, ${c.held} held back`),
+        `Written to ${data.out_folder}`,
+      ];
+      if (data.failures.length) {
+        show("error", `Finished in ${elapsed()}s with ${data.failures.length} error(s)`, [
+          ...data.failures.map(f => `${f.file}: ${f.error}`),
+          ...lines,
+        ]);
+      } else {
+        show("ok", `Finished in ${elapsed()}s`, lines);
+      }
+    } catch (err) {
+      clearInterval(timer);
+      show("error", `Error: ${err.message}`);
+    } finally {
+      button.disabled = false;
+    }
+  });
+})();
+</script>
+{% endblock %}

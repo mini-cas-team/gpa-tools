@@ -1,19 +1,21 @@
-"""Command line entry point: ``python -m gpa_ana``."""
+"""Command line entry point: ``python -m gpa_ana``.
+
+Settings in, console and files out.  The run itself is ``service.analyse``,
+shared with the web UI.
+"""
 
 from __future__ import annotations
 
 import argparse
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .categories import load_ruleset
 from .config import Config, ConfigError, _categories
 from .extract import configure_ocr_concurrency
 from .layout import load_profiles
-from .pipeline import apply_categories, parse_transcript
-from .rank import rank, summarise
-from .report import console_table, write_outputs
+from .report import console_table
+from .service import analyse
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -76,94 +78,62 @@ def main(argv: list[str] | None = None) -> int:
     # scanned file sits among many fast ones -- it still gets the whole box.
     workers = config.worker_count
     configure_ocr_concurrency(workers)
-    parallel_files = len(pdfs) > 1 and workers > 1
 
-    def parse_one(pdf: Path):
-        transcript = parse_transcript(
-            pdf,
-            profiles,
-            force_ocr=config.force_ocr,
-            dpi=config.ocr_dpi,
-            workers=workers,
-        )
-        # One parse feeds every category: tagging is a set, so the rulesets
-        # accumulate onto the same courses rather than competing.
-        for ruleset in rulesets:
-            apply_categories(transcript, ruleset)
-        return transcript, {r.id: summarise(transcript, r.id) for r in rulesets}
+    run = analyse(
+        pdfs,
+        rulesets,
+        profiles,
+        force_ocr=config.force_ocr,
+        dpi=config.ocr_dpi,
+        workers=workers,
+        min_category_courses=config.min_category_courses,
+        out_folder=config.out_folder,
+        on_error=lambda pdf, exc: print(f"  !! {pdf.name}: {exc}", file=sys.stderr),
+    )
 
-    def attempt(pdf: Path):
-        try:
-            return pdf, parse_one(pdf), None
-        except Exception as exc:  # one bad file must not sink the batch
-            return pdf, None, exc
-
-    if parallel_files:
-        with ThreadPoolExecutor(max_workers=min(workers, len(pdfs))) as pool:
-            outcomes = list(pool.map(attempt, pdfs))
-    else:
-        outcomes = [attempt(pdf) for pdf in pdfs]
-
-    transcripts = []
-    by_category: dict[str, list] = {r.id: [] for r in rulesets}
-    failures = []
-    for pdf, parsed, error in outcomes:
-        if error is not None:
-            failures.append((pdf.name, str(error)))
-            print(f"  !! {pdf.name}: {error}", file=sys.stderr)
-            continue
-        transcript, results = parsed
-        transcripts.append(transcript)
-        for category_id, result in results.items():
-            by_category[category_id].append(result)
-        if args.verbose:
+    if args.verbose:
+        for transcript, results in run.parsed:
             for result in results.values():
                 _print_detail(result, transcript)
 
-    if not transcripts:
+    if not run.transcripts:
         print("no transcripts could be parsed", file=sys.stderr)
         return 1
 
-    written = []
-    for ruleset in rulesets:
-        ranked, held = rank(
-            by_category[ruleset.id], min_courses=config.min_category_courses
-        )
-        print(console_table(ranked, ruleset.id))
+    for outcome in run.categories:
+        print(console_table(outcome.ranked, outcome.category))
 
-        if held:
+        if outcome.held:
             print("\nHeld back (not ranked):")
-            for result, reason in held:
+            for result, reason in outcome.held:
                 print(f"  - {result.student} ({result.file}): {reason}")
         print()
-        written.append(write_outputs(config.out_folder, ruleset.id, ranked, held))
 
     # Gates and warnings describe the parse, not the taxonomy, so they are
     # reported once however many categories were ranked.
-    gates = {"pass": 0, "FAIL": 0, "none": 0}
-    for transcript in transcripts:
-        gates[transcript.gate] = gates.get(transcript.gate, 0) + 1
+    gates = run.gates
     print(
         f"Validation gates: {gates['pass']} pass, {gates['FAIL']} fail, "
         f"{gates['none']} with nothing to check against"
     )
 
-    flagged = [t for t in transcripts if t.warnings]
-    if flagged:
+    if run.warnings:
         print("\nWarnings:")
-        for transcript in flagged:
-            for warning in transcript.warnings:
-                print(f"  - {transcript.file}: {warning}")
+        for file, warning in run.warnings:
+            print(f"  - {file}: {warning}")
 
-    if failures:
-        print(f"\n{len(failures)} file(s) could not be parsed:")
-        for name, message in failures:
+    if run.failures:
+        print(f"\n{len(run.failures)} file(s) could not be parsed:")
+        for name, message in run.failures:
             print(f"  - {name}: {message}")
 
     print()
-    for paths in written:
-        print(f"Wrote {paths['json']}, {paths['csv']}")
-    print(f"Per-student detail in {written[0]['courses']}/")
+    for outcome in run.categories:
+        if outcome.outputs:
+            print(f"Wrote {outcome.outputs['json']}, {outcome.outputs['csv']}")
+    written = [o.outputs for o in run.categories if o.outputs]
+    if written:
+        print(f"Per-student detail in {written[0]['courses']}/")
     return 0
 
 
