@@ -1,0 +1,15 @@
+{
+  "student": {
+    "name":       ["Name"],
+    "student_id": ["Student ID", "Alpha Code", "Caltech UID", "Campus ID", "Cornell NetID",
+                   "Hopkins ID", "HUID", "MIT ID", "NYU N-Number", "Penn ID", "PUID", "SID",
+                   "SUID", "UCID", "UID", "UNI", "UVA Computing ID", "Yale SID"],
+    "major":      ["Major", "Concentration", "Field of Concentration", "Course", "Option"],
+    "degree":     ["Degree"],
+    "honors":     ["Honors"]
+  },
+  "student_position_fallback": ["name", "student_id", "major", "degree", "honors"],
+  "credit_unit": ["Credits", "Units", "Points", "Courses", "Course Units", "Course Credits"],
+  "period_type": ["Semester", "Quarter", "Term"],
+  "season":      ["Fall", "Autumn", "Winter", "Spring", "Summer"]
+}

@@ -1,0 +1,102 @@
+{
+  "source_file": null,
+  "institution": {
+    "name": null,
+    "location": null,
+    "registrar_office": null
+  },
+  "document_title": null,
+  "student": {
+    "name": null,
+    "student_id": null,
+    "id_label": null,
+    "major": null,
+    "major_label": null,
+    "degree": null,
+    "degree_abbreviation": null,
+    "conferred": null,
+    "honors": null
+  },
+  "credit_unit": null,
+  "years": [
+    {
+      "year": null,
+      "label": null,
+      "terms": [
+        {
+          "term": null,
+          "season": null,
+          "period_type": null,
+          "year": null,
+          "courses": [
+            {
+              "code": null,
+              "title": null,
+              "grade": null,
+              "credits": null,
+              "points": null,
+              "gpa": null,
+              "gpa_source": null,
+              "counts_in_gpa": null,
+              "gpa_4": null
+            }
+          ],
+          "summary": {
+            "credits": null,
+            "term_gpa": null,
+            "cumulative_credits": null,
+            "cumulative_gpa": null
+          }
+        }
+      ]
+    }
+  ],
+  "summary_of_record": {
+    "total_credits_earned": null,
+    "cumulative_gpa": null,
+    "gpa_scale": null,
+    "note": null
+  },
+  "grading_key": {
+    "grade_points": {
+      "A+": null,
+      "A": null,
+      "A-": null,
+      "B+": null,
+      "B": null,
+      "B-": null,
+      "C+": null,
+      "C": null,
+      "C-": null,
+      "D+": null,
+      "D": null,
+      "D-": null,
+      "E": null,
+      "F": null
+    },
+    "codes": {
+      "W": null,
+      "I": null,
+      "INC": null,
+      "IP": null,
+      "P": null,
+      "P / F": null,
+      "P / D / F": null,
+      "P / NP": null,
+      "P / NC": null,
+      "PA / FL": null,
+      "CR / NC": null,
+      "CR / D / F": null,
+      "S / U": null,
+      "SAT / UNS": null,
+      "AU": null,
+      "AUD": null,
+      "E": null,
+      "EXLD": null,
+      "O": null,
+      "R": null
+    },
+    "notes": []
+  },
+  "warnings": []
+}

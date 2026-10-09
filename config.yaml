@@ -1,13 +1,42 @@
 # gpa-ana configuration
 #
 # pdf-folder : directory of student transcript PDFs to analyse
-# category   : which course taxonomy to rank on (see gpa_ana/categories/rulesets/)
 
 pdf-folder: /home/personal/Templates/transcripts
-category: [STEM, MEDICAL, LAW] # one or more; every listed category is ranked in the same run
 
 # --- optional settings (defaults shown) -------------------------------------
 out-folder: /home/personal/Templates/out # where results are written
 min-category-courses: 4 # exclude students below this many category courses
 # jobs: 0                         # parallel workers (0 = one per CPU); CLI: -j N
 # ocr-dpi: 300                    # render resolution for scanned pages
+
+# --- llm_category (python -m llm_category --category STEM) ------------------
+# Separate program: an LLM decides category membership. Reads the
+# *.common.json files in work-folder (made by `python3 -m upload`), writes to
+# <out-folder>/llm_category/, logs to <log-folder>/llm_category.log.
+llm-category:
+  model: qwen2.5:3b # any model in `ollama list`
+  ollama-url: http://localhost:11434
+
+work-folder: /home/personal/Templates/work
+
+log-folder: /home/personal/Templates/log
+
+# --- category definitions (llm_category) ------------------------------------
+# Written by llm_category and the browser_view Upload tab; edit freely.
+# Changing a definition clears that category's cached answers on the next run.
+# Delete an entry to have the LLM write a new one.
+category-definitions:
+  MEDICAL: The MEDICAL category includes courses focused on health sciences, including anatomy,
+    physiology, microbiology, pharmacology, and medical genetics. It also encompasses allied
+    health fields such as nursing, physical therapy, and occupational therapy. Subjects like
+    veterinary medicine (which focuses on animals) are not included in this category, as they
+    are categorized under a separate 'ANIMAL SCIENCE' category. Additionally, courses that
+    primarily focus on public health or healthcare policy are typically placed under the broader
+    'SOCIAL SCIENCES' category.
+  STEM: STEM stands for Science, Technology, Engineering, and Mathematics. This category includes
+    subjects such as biology, chemistry, physics, computer science, engineering disciplines
+    like civil, mechanical, and electrical engineering, and mathematics. Subjects like fine
+    arts, literature, philosophy, and humanities are typically not included in the STEM category,
+    as they do not fall under the scientific or technological domains that are central to
+    these fields.

@@ -1,0 +1,360 @@
+{% extends "base.html" %}
+
+{% block title %}Browser View — upload{% endblock %}
+
+{% block body %}
+<div class="split">
+<section aria-labelledby="upload-heading">
+<h2 id="upload-heading">Upload</h2>
+<form id="upload-form" method="post" action="/upload" enctype="multipart/form-data">
+  <fieldset>
+    <legend>PDF input</legend>
+    <label for="pdfs">Upload transcripts</label>
+    <input type="file" id="pdfs" name="pdfs" accept="application/pdf,.pdf" multiple>
+    <p class="hint">Leave empty to convert every PDF in the configured folder,
+      <code>{{ pdf_folder or "(pdf-folder not set)" }}</code>.</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Output</legend>
+    <p class="hint" style="margin-top:0">Each PDF becomes <code>&lt;name&gt;.txt</code>
+      (<code>pdftotext -layout</code>) and <code>&lt;name&gt;.common.json</code>
+      (common format with per-course GPA, the input llm_category reads) in <code>{{ work_folder or "(work-folder not set)" }}</code>,
+      the <code>work-folder</code> in config.yaml. Uploaded PDFs are saved there too.
+      Files with the same name are replaced.</p>
+  </fieldset>
+
+  <button type="submit">Convert</button>
+</form>
+
+<div id="status" class="status" role="status" aria-live="polite" hidden></div>
+</section>
+
+<section aria-labelledby="category-heading">
+<h2 id="category-heading">Categories</h2>
+<fieldset>
+  <legend>llm_category definitions</legend>
+  <div class="category-bar">
+    <label for="category-select">Category</label>
+    <select id="category-select" hidden></select>
+    <button type="button" id="category-update" class="secondary toggle" aria-pressed="false" hidden>Update</button>
+    <button type="button" id="category-add" class="secondary toggle" aria-pressed="false">Add</button>
+  </div>
+
+  <!-- Under the bar: one of view / update / add, then progress while busy. -->
+  <p class="panel definition" id="category-definition">Loading…</p>
+
+  <form id="category-update-form" hidden>
+    <label for="category-text">Definition of <span id="category-update-name"></span></label>
+    <textarea id="category-text" name="definition" rows="9" required></textarea>
+    <p class="hint">Go saves the definition to config.yaml and ranks every student in the
+      work-folder on it with llm_category. That runs in the background.</p>
+    <div class="dialog-actions">
+      <button type="submit" id="category-update-go">Go</button>
+      <button type="button" id="category-update-cancel" class="secondary">Cancel</button>
+    </div>
+  </form>
+
+  <form id="category-add-form" hidden>
+    <label for="category-name">Name</label>
+    <div class="add-row" style="margin-top:0">
+      <input type="text" id="category-name" name="name" maxlength="40"
+             placeholder="e.g. BUSINESS" list="category-suggestions" autocomplete="off" required>
+      <datalist id="category-suggestions"></datalist>
+      <button type="submit" id="category-add-go">Go</button>
+      <button type="button" id="category-add-cancel" class="secondary">Cancel</button>
+    </div>
+  </form>
+
+  <div id="category-progress" class="progress" hidden>
+    <progress id="category-progress-bar"></progress>
+    <p class="hint" id="category-progress-text"></p>
+  </div>
+
+  <p class="hint">Definitions live in <code id="category-path">config.yaml</code>
+    (<code>category-definitions</code>). A hand edit there shows after a page reload.</p>
+</fieldset>
+<div id="category-status" class="status" role="status" aria-live="polite" hidden></div>
+</section>
+</div>
+
+<script>
+// Size the two panels to the window below the header, so each scrolls alone.
+(() => {
+  const split = document.querySelector(".split");
+  const fit = () => {
+    const top = split.getBoundingClientRect().top + window.scrollY;
+    document.documentElement.style.setProperty("--split-top", `${Math.round(top)}px`);
+  };
+  fit();
+  window.addEventListener("resize", fit);
+  new ResizeObserver(fit).observe(document.querySelector("header.top"));
+})();
+
+(() => {
+  const form = document.getElementById("upload-form");
+  const button = form.querySelector("button[type=submit]");
+  const status = document.getElementById("status");
+
+  // Built with textContent throughout: messages carry file names and paths.
+  function show(kind, title, lines = []) {
+    const box = document.createElement("div");
+    box.className = kind;
+    const head = document.createElement("strong");
+    head.textContent = title;
+    box.append(head);
+    if (lines.length) {
+      const list = document.createElement("ul");
+      list.className = "notes";
+      for (const line of lines) {
+        const item = document.createElement("li");
+        item.textContent = line;
+        list.append(item);
+      }
+      box.append(list);
+    }
+    status.replaceChildren(box);
+    status.hidden = false;
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    button.disabled = true;
+
+    const started = Date.now();
+    const elapsed = () => Math.round((Date.now() - started) / 1000);
+    show("running", "Converting… 0s");
+    const timer = setInterval(() => show("running", `Converting… ${elapsed()}s`), 1000);
+
+    try {
+      const response = await fetch(form.action, { method: "POST", body: new FormData(form) });
+      let data;
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error(`server returned ${response.status} ${response.statusText}`);
+      }
+      clearInterval(timer);
+
+      const lines = (data.converted || []).flatMap(c =>
+        c.warnings.length ? c.warnings.map(w => `${c.file}: ${w}`) : [c.file]);
+      if (data.work_folder) lines.push(`Written to ${data.work_folder}`);
+      const failures = (data.failures || []).map(f => `${f.file}: ${f.error}`);
+
+      if (!data.ok) {
+        show("error", `Error: ${data.error}`, failures);
+      } else if (failures.length) {
+        show("error", `Converted ${data.converted.length} of ${data.pdf_count} from ${data.source} in ${elapsed()}s; ${failures.length} failed`,
+          [...failures, ...lines]);
+      } else {
+        show("ok", `Converted ${data.converted.length} PDF(s) from ${data.source} in ${elapsed()}s`, lines);
+      }
+    } catch (err) {
+      clearInterval(timer);
+      show("error", `Error: ${err.message}`);
+    } finally {
+      button.disabled = false;
+    }
+  });
+})();
+
+
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const select = $("category-select"), updateButton = $("category-update"), addButton = $("category-add");
+  const definitionBox = $("category-definition");
+  const updateForm = $("category-update-form"), text = $("category-text");
+  const addForm = $("category-add-form"), nameInput = $("category-name");
+  const progressBox = $("category-progress"), bar = $("category-progress-bar");
+  const progressText = $("category-progress-text"), status = $("category-status");
+  let categories = {}, names = [];
+  let poller = null;
+  let action = null;  // the active button: "update", "add" or none
+
+  // textContent throughout: definitions are LLM output and hand edits.
+  function showStatus(kind, parts) {
+    if (!kind) { status.hidden = true; return; }
+    const box = document.createElement("div");
+    box.className = kind;
+    box.append(...[].concat(parts));
+    status.replaceChildren(box);
+    status.hidden = false;
+  }
+  const minutes = (s) => s < 90 ? `${Math.round(s)} s` : `${Math.round(s / 60)} min`;
+
+  async function call(url, options) {
+    const response = await fetch(url, options);
+    const data = await response.json().catch(() => ({ error: `server returned ${response.status}` }));
+    if (!response.ok) throw new Error(data.error || `server returned ${response.status}`);
+    return data;
+  }
+  const post = (fields) => {
+    const body = new FormData();
+    for (const [k, v] of Object.entries(fields)) body.append(k, v);
+    return { method: "POST", body };
+  };
+
+  // ---- modes: what sits under the action bar ------------------------------
+  // view: the selected definition, read-only. update: it, editable.
+  // add: the Name box. busy: a draft or run is in progress (bar locked);
+  // the button that started it stays highlighted.
+  function setMode(mode) {
+    if (mode !== "busy") action = mode === "view" ? null : mode;
+    updateButton.setAttribute("aria-pressed", action === "update");
+    addButton.setAttribute("aria-pressed", action === "add");
+    // Add is about a new category, so the selected one's definition steps aside.
+    definitionBox.hidden = mode === "update" || action === "add";
+    updateForm.hidden = mode !== "update";
+    addForm.hidden = mode !== "add";
+    const busy = mode === "busy";
+    // While Update or Add is active, the other button and the dropdown are off;
+    // the active button stays usable (to close it) unless a draft or run is going.
+    updateButton.disabled = busy || action === "add";
+    addButton.disabled = busy || action === "update";
+    select.disabled = busy || action !== null;
+    progressBox.hidden = !busy;
+    if (mode === "update") {
+      $("category-update-name").textContent = select.value;
+      text.value = categories[select.value];
+      text.focus();
+    } else if (mode === "add") {
+      nameInput.focus();
+    }
+  }
+  function progress(message, done, total) {
+    if (total) { bar.max = total; bar.value = done; } else { bar.removeAttribute("value"); }
+    progressText.textContent = message;
+  }
+
+  function render(selected) {
+    const empty = !names.length;
+    select.hidden = updateButton.hidden = empty;
+    select.replaceChildren(...names.map((name) => new Option(name, name)));
+    // The first category in config.yaml unless one is asked for.
+    if (selected && names.includes(selected)) select.value = selected;
+    definitionBox.textContent = empty
+      ? "No categories yet. Use Add to have the LLM define one."
+      : categories[select.value];
+  }
+
+  async function load(selected) {
+    const data = await call("/categories");
+    categories = data.categories || {};
+    names = data.names || Object.keys(categories);
+    $("category-path").textContent = data.path;
+    // The Name box suggests the defined names (none when the section is empty).
+    $("category-suggestions").replaceChildren(...names.map((name) => new Option(name)));
+    render(selected);
+  }
+
+  select.addEventListener("change", () => { render(select.value); setMode("view"); });
+  updateButton.addEventListener("click", () => setMode(updateForm.hidden ? "update" : "view"));
+  addButton.addEventListener("click", () => {
+    if (addForm.hidden) { addForm.reset(); setMode("add"); } else { setMode("view"); }
+  });
+  $("category-update-cancel").addEventListener("click", () => setMode("view"));
+  $("category-add-cancel").addEventListener("click", () => setMode("view"));
+
+  // ---- Add -> Go: the LLM drafts, the draft is saved, then Update ----------
+  addForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const name = nameInput.value.trim().toUpperCase();
+    showStatus(null);
+    setMode("busy");
+    const started = Date.now();
+    const tick = () => progress(
+      `Asking the LLM to define ${name}… ${minutes((Date.now() - started) / 1000)}`);
+    tick();
+    const timer = setInterval(tick, 1000);
+    try {
+      const draft = await call("/categories/draft", post({ name }));
+      await call("/categories", post({ name: draft.name, definition: draft.definition }));
+      await load(draft.name);
+      showStatus("ok", `${draft.name} defined by the LLM and saved to config.yaml. ` +
+        `Edit it if needed, then Go to rank students on it.`);
+      setMode("update");
+    } catch (err) {
+      showStatus("error", `Error: ${err.message}`);
+      setMode("add");
+    } finally {
+      clearInterval(timer);
+    }
+  });
+
+  // ---- Update -> Go: save the edit, run llm_category ----------------------
+  updateForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const name = select.value, definition = text.value.trim();
+    showStatus(null);
+    try {
+      if (definition !== categories[name]) {
+        await call("/categories", post({ name, definition, replace: "1" }));
+        await load(name);
+      }
+      setMode("busy");
+      progress(`Starting ${name}…`);
+      const est = await call(`/runs/estimate?${new URLSearchParams({ category: name })}`);
+      showProgress(await call("/runs", post({ category: name })), est);
+      watch(est);
+    } catch (err) {
+      showStatus("error", `Error: ${err.message}`);
+      setMode("update");  // keep the text so Go can be tried again
+    }
+  });
+
+  // ---- background run progress -------------------------------------------
+  function showProgress(state, est) {
+    if (state.status === "running") {
+      let eta = "";
+      if (state.total && state.done) {
+        eta = ` · about ${minutes(state.elapsed / state.done * (state.total - state.done))} left`;
+      } else if (est?.pending) {
+        eta = ` · about ${minutes(est.seconds)} expected`;
+      }
+      const counts = state.total ? `${state.done} of ${state.total} course(s) answered` : "starting";
+      setMode("busy");
+      progress(`Ranking students on ${state.category}: ${counts} · ` +
+        `${minutes(state.elapsed)} elapsed${eta}`, state.done, state.total);
+      return;
+    }
+    if (state.status === "done") {
+      const link = document.createElement("a");
+      link.href = `/view?${new URLSearchParams({ folder: state.folder, category: state.category })}`;
+      link.textContent = "Open in View";
+      showStatus("ok", [`${state.category} ranking written in ${minutes(state.elapsed)}. `, link]);
+    } else if (state.status === "error") {
+      showStatus("error", `${state.category} run failed: ${state.error}`);
+    }
+    // Back to the read-only definition the run used.
+    load(state.category).catch(() => {}).finally(() => setMode("view"));
+  }
+  function watch(est) {
+    clearInterval(poller);
+    poller = setInterval(async () => {
+      try {
+        const state = await call("/runs/status");
+        if (state.status !== "running") clearInterval(poller);
+        showProgress(state, est);
+      } catch { /* keep polling; the server may be busy */ }
+    }, 3000);
+  }
+
+  (async () => {
+    try {
+      await load();
+    } catch (err) {
+      showStatus("error", `Error: ${err.message}`);
+    }
+    setMode("view");
+    // A run started earlier (or in another tab) keeps reporting here.
+    const state = await call("/runs/status").catch(() => ({}));
+    if (state.status === "running") {
+      select.value = state.category;
+      action = "update";  // a run is what Update starts
+      showProgress(state);
+      watch();
+    }
+  })();
+})();
+</script>
+{% endblock %}

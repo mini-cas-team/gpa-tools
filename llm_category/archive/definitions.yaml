@@ -1,0 +1,11 @@
+# Category definitions taken out of config.yaml on 2026-10-09, kept for reuse.
+# To restore one, copy its entry back under category-definitions: in config.yaml.
+# With the text unchanged, its cached LLM answers (out/llm_category/cache_<name>.json)
+# are still valid, so a run needs no new LLM calls.
+
+STEM: STEM stands for Science, Technology, Engineering, and Mathematics. This category includes
+  subjects such as biology, chemistry, physics, computer science, engineering disciplines
+  like civil, mechanical, and electrical engineering, and mathematics. Subjects like fine
+  arts, literature, philosophy, and humanities are typically not included in the STEM category,
+  as they do not fall under the scientific or technological domains that are central to these
+  fields.

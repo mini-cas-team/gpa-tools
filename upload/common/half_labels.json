@@ -1,0 +1,56 @@
+{
+  "student": {
+    "name": [
+      "Name"
+    ],
+    "student_id": [
+      "Caltech UID",
+      "MIT ID",
+      "NYU N-Number",
+      "PUID",
+      "SID",
+      "Student ID",
+      "UCID",
+      "UID",
+      "UNI",
+      "Yale SID"
+    ],
+    "major": [
+      "Concentration",
+      "Course",
+      "Major",
+      "Option"
+    ],
+    "degree": [
+      "Degree"
+    ],
+    "honors": [
+      "Honors"
+    ]
+  },
+  "student_position_fallback": [
+    "name",
+    "student_id",
+    "major",
+    "degree",
+    "honors"
+  ],
+  "credit_unit": [
+    "Course Credits",
+    "Courses",
+    "Credits",
+    "Points",
+    "Units"
+  ],
+  "period_type": [
+    "Quarter",
+    "Semester",
+    "Term"
+  ],
+  "season": [
+    "Autumn",
+    "Fall",
+    "Spring",
+    "Winter"
+  ]
+}
