@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-from .convert import pdf_to_common_json
+from .convert import add_tool_folders, pdf_to_common_json
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 log = logging.getLogger("upload")
@@ -27,7 +27,7 @@ log = logging.getLogger("upload")
 def setup_logging(log_folder: Path) -> Path:
     log_folder.mkdir(parents=True, exist_ok=True)
     path = log_folder / "upload.log"
-    file_handler = logging.FileHandler(path)
+    file_handler = logging.FileHandler(path, encoding="utf-8")
     file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     log.addHandler(file_handler)
     log.addHandler(logging.StreamHandler(sys.stdout))
@@ -40,7 +40,8 @@ def main(argv=None) -> int:
     ap.add_argument("--config", type=Path, default=PROJECT_ROOT / "config.yaml")
     args = ap.parse_args(argv)
 
-    cfg = yaml.safe_load(args.config.read_text()) or {}
+    cfg = yaml.safe_load(args.config.read_text(encoding="utf-8")) or {}
+    add_tool_folders(cfg.get("tool-folders"))
     pdf_folder = Path(cfg["pdf-folder"]).expanduser()
     work = Path(cfg["work-folder"]).expanduser()
     log_path = setup_logging(Path(cfg.get("log-folder") or "log").expanduser())

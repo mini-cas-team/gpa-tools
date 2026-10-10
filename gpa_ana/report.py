@@ -73,10 +73,10 @@ def write_outputs(
         ],
     }
     json_path = out_dir / f"rank_{slug}_gpa.json"
-    json_path.write_text(json.dumps(payload, indent=2))
+    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     csv_path = out_dir / f"rank_{slug}_gpa.csv"
-    with csv_path.open("w", newline="") as fh:
+    with csv_path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
         writer.writerow(
             [
@@ -101,7 +101,7 @@ def write_outputs(
     for result in [r for r, _ in held] + ranked:
         detail = asdict(result)
         (courses_dir / f"{Path(result.file).stem}.{slug}.courses.json").write_text(
-            json.dumps(detail, indent=2)
+            json.dumps(detail, indent=2), encoding="utf-8"
         )
 
     return {"json": json_path, "csv": csv_path, "courses": courses_dir}

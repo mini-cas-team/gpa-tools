@@ -103,7 +103,7 @@ def load_ruleset(name: str, directory: Path | None = None) -> Ruleset:
     if not path.exists():
         available = ", ".join(sorted(p.stem for p in directory.glob("*.yaml"))) or "none"
         raise RulesetError(f"no ruleset for category {name!r} (available: {available})")
-    raw = yaml.safe_load(path.read_text()) or {}
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     raw.setdefault("id", name)
     return Ruleset(**raw)
 

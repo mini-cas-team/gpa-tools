@@ -33,7 +33,23 @@ deterministic Python.
 ```bash
 git clone https://github.com/johnprofessional132/gpa-tools.git
 cd gpa-tools
+claude                     # then type:  /install-gpa-tools
+```
 
+The `/install-gpa-tools` skill does the rest in your own user account, with no
+admin rights, on Linux, macOS or Windows:
+- the venv and packages
+- pdftotext and tesseract (into `.tools/`, if they're missing)
+- Ollama and a qwen2.5 model sized to the machine's RAM and GPU
+- `config.yaml`, created from `config.example.yaml`
+
+It checks what is already installed first and asks before downloading. See
+[install/README.md](install/README.md) for the scripts it uses, which also
+work by hand. `config.yaml` is machine-local and not committed.
+
+Or by hand, on Linux with admin rights:
+
+```bash
 python3.12 -m venv .venv312
 .venv312/bin/pip install -r requirements.txt
 ```
@@ -49,7 +65,7 @@ sudo apt install poppler-utils tesseract-ocr
 `pdftotext` is required for every run; the other two only for scanned
 transcripts. A missing tool is reported by name rather than failing obscurely.
 
-Then point `config.yaml` at your transcripts:
+Then copy `config.example.yaml` to `config.yaml` and point it at your transcripts:
 
 ```yaml
 pdf-folder: /path/to/transcripts
@@ -473,6 +489,7 @@ llm_category/     LLM category membership and ranking (python -m llm_category)
   llm.py          the Ollama prompts
   store.py        category-definitions in config.yaml, answer cache
 browser_view/     Flask UI: Upload and View tabs (python -m browser_view)
+install/          per-user installer scripts (used by /install-gpa-tools)
 tests/
 ```
 

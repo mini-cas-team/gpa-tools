@@ -43,6 +43,21 @@ class ConfigError(RuntimeError):
     pass
 
 
+def add_tool_folders(folders) -> None:
+    """Put config.yaml's ``tool-folders`` first on PATH.
+
+    The installer (install/) puts pdftotext and tesseract in a folder of the
+    user's own when there is no admin access, and records it here.
+    """
+    if isinstance(folders, str):
+        folders = [folders]
+    current = os.environ.get("PATH", "").split(os.pathsep)
+    extra = [str(Path(str(f)).expanduser()) for f in folders or []]
+    extra = [f for f in extra if f not in current]
+    if extra:
+        os.environ["PATH"] = os.pathsep.join(extra + current)
+
+
 @dataclass
 class Config:
     pdf_folder: Path
@@ -59,9 +74,11 @@ class Config:
         if not path.exists():
             raise ConfigError(f"config file not found: {path}")
 
-        raw = yaml.safe_load(path.read_text()) or {}
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         if not isinstance(raw, dict):
             raise ConfigError(f"{path}: expected a mapping at the top level")
+
+        add_tool_folders(raw.get("tool-folders"))
 
         missing = [k for k in ("pdf-folder", "category") if k not in raw]
         if missing:

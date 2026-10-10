@@ -16,7 +16,7 @@ import json, re, sys
 from pathlib import Path
 
 RULES_DIR = Path(__file__).parent / "school_rules"
-STANDARD = json.loads((Path(__file__).parent / "standard_scale.json").read_text())["grade_points"]
+STANDARD = json.loads((Path(__file__).parent / "standard_scale.json").read_text(encoding="utf-8"))["grade_points"]
 TOLERANCE = 0.006   # points are printed to 2 decimals
 TERM_TOLERANCE = 0.011
 
@@ -25,7 +25,7 @@ def slug(name):
 
 def load_rules(institution):
     path = RULES_DIR / f"{slug(institution)}.json"
-    return json.loads(path.read_text()) if path.exists() else {}
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 def non_gpa_codes(doc, rules):
     """Grade codes that carry no grade points, e.g. 'P / F' -> {'P', 'F'} minus real letter grades."""
@@ -78,8 +78,8 @@ def add_gpa(doc):
 
 if __name__ == "__main__":
     for path in sorted(Path(sys.argv[1]).glob("*.common.json")):
-        doc = add_gpa(json.loads(path.read_text()))
-        path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
+        doc = add_gpa(json.loads(path.read_text(encoding="utf-8")))
+        path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         for w in doc["warnings"]:
             print(f"{path.name}: {w}")
     print("done")

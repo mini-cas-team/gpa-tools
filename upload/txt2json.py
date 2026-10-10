@@ -17,7 +17,7 @@ TSUM = re.compile(r"^(?P<label>.+?): (?P<cr>[\d.]+) Term GPA: (?P<gpa>[\d.]+)(?:
 GRADEPAIR = re.compile(r"(\S+) = ([\d.]+)")
 
 def parse(path):
-    lines = [l.strip() for l in path.read_text().splitlines()]
+    lines = [l.strip() for l in path.read_text(encoding="utf-8").splitlines()]
     doc = {"source_file": path.name.replace(".txt", ".pdf")}
     header, student, years, summary, key = [], {}, [], {}, {"grade_points": {}, "codes": {}, "notes": []}
     unparsed, section, term, credit_unit = [], "header", None, None
@@ -80,7 +80,7 @@ if __name__ == "__main__":
     folder = Path(sys.argv[1])
     for txt in sorted(folder.glob("*.txt")):
         d = parse(txt)
-        txt.with_suffix(".json").write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+        txt.with_suffix(".json").write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         if "unparsed_lines" in d:
             print("UNPARSED", txt.name, d["unparsed_lines"][:3])
     print("done")

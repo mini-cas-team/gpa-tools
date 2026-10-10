@@ -65,6 +65,7 @@ class ExtractionError(RuntimeError):
 
 
 def _require(tool: str) -> str:
+    """The tool's full path; run by it, which also finds tool.exe on Windows."""
     path = shutil.which(tool)
     if not path:
         raise ExtractionError(f"required external tool not found on PATH: {tool}")
@@ -96,11 +97,13 @@ def extract_pages(
 
 
 def _text_layer_pages(pdf: Path) -> list[Page]:
-    _require("pdftotext")
+    pdftotext = _require("pdftotext")
     proc = subprocess.run(
-        ["pdftotext", "-layout", str(pdf), "-"],
+        [pdftotext, "-layout", "-enc", "UTF-8", str(pdf), "-"],
         capture_output=True,
         text=True,
+        encoding="utf-8",  # not the locale's (cp1252 on Windows)
+        errors="replace",
         check=False,
     )
     if proc.returncode != 0:
@@ -120,11 +123,11 @@ def _text_layer_pages(pdf: Path) -> list[Page]:
 def _ocr_pages(
     pdf: Path, *, dpi: int = 300, pages: list[int] | None = None, workers: int = 1
 ) -> list[Page]:
-    _require("pdftoppm")
+    pdftoppm = _require("pdftoppm")
     _require("tesseract")
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
-        cmd = ["pdftoppm", "-gray", "-r", str(dpi), "-png"]
+        cmd = [pdftoppm, "-gray", "-r", str(dpi), "-png"]
         if pages:
             cmd += ["-f", str(min(pages)), "-l", str(max(pages))]
         cmd += [str(pdf), str(tmpdir / "page")]
@@ -261,9 +264,11 @@ def _tesseract_words(img: Path, box: tuple[int, int, int, int]):
 
     with _OCR_SLOTS:
         proc = subprocess.run(
-            ["tesseract", str(target), "stdout", "--psm", "6", "tsv"],
+            [_require("tesseract"), str(target), "stdout", "--psm", "6", "tsv"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
             env=TESSERACT_ENV,
         )

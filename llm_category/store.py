@@ -27,7 +27,7 @@ class Definitions:
 
     def __init__(self, config_path: Path):
         self.path = config_path
-        cfg = yaml.safe_load(config_path.read_text()) if config_path.exists() else None
+        cfg = yaml.safe_load(config_path.read_text(encoding="utf-8")) if config_path.exists() else None
         self.data: dict[str, str] = dict((cfg or {}).get(SECTION) or {})
 
     def get_or_create(self, category: str, client) -> tuple[str, bool]:
@@ -42,7 +42,7 @@ class Definitions:
         self._write()
 
     def _write(self) -> None:
-        text = self.path.read_text() if self.path.exists() else ""
+        text = self.path.read_text(encoding="utf-8") if self.path.exists() else ""
         lines = text.splitlines(keepends=True)
         block = SECTION_HEADER + yaml.safe_dump(
             {SECTION: dict(sorted(self.data.items()))}, allow_unicode=True, width=88
@@ -70,7 +70,7 @@ class Definitions:
         if reread.get(SECTION) != self.data:
             raise ValueError(f"could not update {SECTION} in {self.path} safely")
         tmp = self.path.with_name(self.path.name + ".tmp")
-        tmp.write_text(new_text)
+        tmp.write_text(new_text, encoding="utf-8")
         tmp.replace(self.path)
 
 
@@ -89,7 +89,7 @@ class AnswerCache:
         self.timing = {"count": 0, "seconds": 0.0}
         self.reset = False
         if path.exists():
-            saved = json.loads(path.read_text())
+            saved = json.loads(path.read_text(encoding="utf-8"))
             if saved.get("stamp") == self.stamp:
                 self.answers = saved["answers"]
                 self.timing = saved.get("timing") or self.timing
@@ -114,5 +114,5 @@ class AnswerCache:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(
             json.dumps({"stamp": self.stamp, "answers": self.answers, "timing": self.timing},
-                       indent=1, sort_keys=True)
+                       indent=1, sort_keys=True), encoding="utf-8"
         )

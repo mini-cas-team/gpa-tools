@@ -157,7 +157,7 @@ def load_profiles(directory: Path | None = None) -> list[Profile]:
     directory = directory or PROFILE_DIR
     profiles: list[Profile] = []
     for path in sorted(directory.glob("*.yaml")):
-        raw = yaml.safe_load(path.read_text()) or {}
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         if raw.pop("abstract", False):
             continue
         try:

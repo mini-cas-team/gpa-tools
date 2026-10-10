@@ -42,7 +42,7 @@ from flask import Flask, abort, jsonify, render_template, request, send_file
 import llm_category.__main__ as llm_run
 from llm_category.llm import OllamaClient
 from llm_category.store import Definitions
-from upload.convert import pdf_to_common_json
+from upload.convert import add_tool_folders, pdf_to_common_json
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024  # a transcript is well under 1 MB
@@ -53,7 +53,7 @@ SOURCES_FILE = "sources.json"
 
 def _load_config(config_path: Path) -> dict:
     try:
-        return yaml.safe_load(config_path.read_text()) or {}
+        return yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         # No usable config just means empty defaults; the folder box still works.
         return {}
@@ -105,7 +105,7 @@ def _student_row(row: dict, category: str) -> dict:
 
 
 def _read_ranking(path: Path, category: str) -> dict:
-    with path.open(newline="") as fh:
+    with path.open(newline="", encoding="utf-8") as fh:
         rows = [_student_row(r, category) for r in csv.DictReader(fh)]
     # gpa_ana's CSV holds only ranked students; llm_category's also lists the
     # ones below the course minimum, with gate=fail and no rank.
@@ -121,7 +121,7 @@ def _read_ranking(path: Path, category: str) -> dict:
 def _courses_from_csv(path: Path, category: str, name: str) -> list[dict]:
     flag = f"is_{category.lower()}"
     courses = []
-    with path.open(newline="") as fh:
+    with path.open(newline="", encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
             if row.get("file") != name:
                 continue
@@ -144,7 +144,7 @@ def _courses_from_extracted(folder: Path, category: str, name: str) -> list[dict
     path = folder / "extracted" / f"{Path(name).stem}.{slug}.courses.json"
     if not path.is_file():
         return None
-    courses = json.loads(path.read_text()).get("courses", [])
+    courses = json.loads(path.read_text(encoding="utf-8")).get("courses", [])
     # gpa_ana flags membership under the category's own key ("stem", "law", ...).
     for course in courses:
         course["in_category"] = bool(course.pop(slug, False))
@@ -179,7 +179,7 @@ def _find_pdf(folder: Path, name: str, cfg: dict) -> Path | None:
     if cfg.get("work-folder"):  # the Upload tab keeps uploaded PDFs there
         candidates.append(Path(cfg["work-folder"]).expanduser())
     try:
-        candidates.append(Path(json.loads((folder / SOURCES_FILE).read_text())["pdf_folder"]))
+        candidates.append(Path(json.loads((folder / SOURCES_FILE).read_text(encoding="utf-8"))["pdf_folder"]))
     except (OSError, ValueError, KeyError, TypeError):
         pass
     if cfg.get("pdf-folder"):
@@ -249,6 +249,7 @@ def create_app(config_path: Path | None = None) -> Flask:
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
     config_path = Path(config_path or PROJECT_ROOT / "config.yaml")
+    add_tool_folders(_load_config(config_path).get("tool-folders"))
 
     @app.get("/")
     def upload():
@@ -481,7 +482,7 @@ def setup_logging(cfg: dict) -> Path:
     folder = Path(cfg.get("log-folder") or "log").expanduser()
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / "browser_view.log"
-    handler = logging.FileHandler(path)
+    handler = logging.FileHandler(path, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
     root = logging.getLogger()
     root.addHandler(handler)

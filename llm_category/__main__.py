@@ -52,12 +52,12 @@ class Student:
 
 
 def load_config(path: Path) -> dict:
-    cfg = yaml.safe_load(path.read_text()) or {}
+    cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     llm_cfg = {**DEFAULTS, **(cfg.get("llm-category") or {})}
     return {
         "in": Path(cfg["work-folder"]).expanduser(),
         "log": Path(cfg.get("log-folder") or "log").expanduser(),
-        "out": Path(cfg.get("out-folder", "out")) / "llm_category",
+        "out": Path(cfg.get("out-folder", "out")).expanduser() / "llm_category",
         "min_courses": int(cfg.get("min-category-courses", 4)),
         "model": llm_cfg["model"],
         "url": llm_cfg["ollama-url"],
@@ -68,7 +68,7 @@ def load_config(path: Path) -> dict:
 def setup_logging(log_folder: Path) -> None:
     """Console plus <log-folder>/llm_category.log (appended, timestamped)."""
     log_folder.mkdir(parents=True, exist_ok=True)
-    file_handler = logging.FileHandler(log_folder / "llm_category.log")
+    file_handler = logging.FileHandler(log_folder / "llm_category.log", encoding="utf-8")
     file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     log.addHandler(file_handler)
     log.addHandler(logging.StreamHandler(sys.stdout))
@@ -76,7 +76,7 @@ def setup_logging(log_folder: Path) -> None:
 
 
 def load_student(path: Path) -> Student:
-    doc = json.loads(path.read_text())
+    doc = json.loads(path.read_text(encoding="utf-8"))
     st = doc.get("student") or {}
     inst = doc.get("institution") or {}
     student = Student(
@@ -147,7 +147,7 @@ def write_outputs(students, category, min_courses, out_dir: Path) -> tuple[Path,
 
     out_dir.mkdir(parents=True, exist_ok=True)
     rank_csv = out_dir / f"rank_{slug}_gpa.csv"
-    with rank_csv.open("w", newline="") as fh:
+    with rank_csv.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(["rank", "student", "institution", "program",
                     f"{category}_GPA", "all_courses_GPA",
@@ -161,7 +161,7 @@ def write_outputs(students, category, min_courses, out_dir: Path) -> tuple[Path,
                         r["n"], r["total"], pct, r["gate"], s.file])
 
     courses_csv = out_dir / f"{slug}_courses.csv"
-    with courses_csv.open("w", newline="") as fh:
+    with courses_csv.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(["student", "file", "term", "code", "title", "grade", "credits", "gpa_4",
                     f"is_{slug}"])
@@ -190,7 +190,7 @@ def seconds_per_answer(cfg: dict) -> float:
     count, seconds = 0, 0.0
     for path in cfg["out"].glob("cache_*.json"):
         try:
-            timing = json.loads(path.read_text()).get("timing") or {}
+            timing = json.loads(path.read_text(encoding="utf-8")).get("timing") or {}
         except (OSError, ValueError):
             continue
         count += timing.get("count", 0)

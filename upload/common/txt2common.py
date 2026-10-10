@@ -8,8 +8,8 @@ import copy, json, re, sys
 from pathlib import Path
 
 HERE = Path(__file__).parent
-LABELS = json.loads((HERE / "labels.json").read_text())
-TEMPLATE = json.loads((HERE / "template.json").read_text())
+LABELS = json.loads((HERE / "labels.json").read_text(encoding="utf-8"))
+TEMPLATE = json.loads((HERE / "template.json").read_text(encoding="utf-8"))
 
 FOOTER = re.compile(r"^.+ — page \d+$")
 YEAR = re.compile(r"^YEAR (\d+): (.+)$")
@@ -42,7 +42,7 @@ def convert(path):
     doc["source_file"] = path.with_suffix(".pdf").name
 
     letterhead, section, term, student_pos = [], "letterhead", None, 0
-    for line in (l.strip() for l in path.read_text().splitlines()):
+    for line in (l.strip() for l in path.read_text(encoding="utf-8", errors="replace").splitlines()):
         if not line or FOOTER.match(line):
             continue
         if line in ("STUDENT RECORD", "SUMMARY OF RECORD", "GRADING KEY"):
@@ -116,7 +116,7 @@ if __name__ == "__main__":
     folder = Path(sys.argv[1])
     for txt in sorted(folder.glob("*.txt")):
         doc = convert(txt)
-        txt.with_suffix(".common.json").write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
+        txt.with_suffix(".common.json").write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         for w in doc["warnings"]:
             print(f"{txt.name}: {w}")
     print("done")

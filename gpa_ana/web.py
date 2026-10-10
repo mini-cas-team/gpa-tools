@@ -141,7 +141,7 @@ def _record_sources(out_folder: Path, pdfs: list[Path], uploaded: bool) -> None:
     else:
         pdf_folder = pdfs[0].parent
     (out_folder / SOURCES_FILE).write_text(
-        json.dumps({"pdf_folder": str(pdf_folder.resolve())}, indent=2)
+        json.dumps({"pdf_folder": str(pdf_folder.resolve())}, indent=2), encoding="utf-8"
     )
 
 
@@ -153,7 +153,7 @@ def _find_pdf(folder: Path, name: str, config_path: Path) -> Path | None:
     """
     candidates = []
     try:
-        recorded = json.loads((folder / SOURCES_FILE).read_text())["pdf_folder"]
+        recorded = json.loads((folder / SOURCES_FILE).read_text(encoding="utf-8"))["pdf_folder"]
         candidates.append(Path(recorded))
     except (OSError, ValueError, KeyError, TypeError):
         pass
@@ -207,7 +207,7 @@ def create_app(config_path: Path | None = None) -> Flask:
         ranking, error = None, None
         if selected:
             try:
-                ranking = json.loads(available[selected].read_text())
+                ranking = json.loads(available[selected].read_text(encoding="utf-8"))
             except (OSError, ValueError) as exc:
                 error = f"could not read {available[selected].name}: {exc}"
         elif not folder.is_dir():
@@ -245,7 +245,7 @@ def create_app(config_path: Path | None = None) -> Flask:
         if not name or not path.is_file():
             return jsonify(error=f"no extracted courses for {name or 'that student'}"), 404
         try:
-            record = json.loads(path.read_text())
+            record = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             return jsonify(error=f"could not read {path.name}: {exc}"), 500
 

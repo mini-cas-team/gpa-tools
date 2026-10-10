@@ -13,7 +13,7 @@ labels = {"student": {"name": set(), "student_id": set(), "major": set(), "degre
           "credit_unit": set(), "period_type": set(), "season": set()}
 grades, codes = set(), set()
 for p in train:
-    d = json.loads(p.with_suffix(".common.json").read_text())   # full-run output = ground truth
+    d = json.loads(p.with_suffix(".common.json").read_text(encoding="utf-8"))   # full-run output = ground truth
     s = d["student"]
     labels["student"]["name"].add("Name"); labels["student"]["degree"].add("Degree")
     labels["student"]["student_id"].add(s["id_label"]); labels["student"]["major"].add(s["major_label"])
@@ -26,7 +26,7 @@ for p in train:
     codes |= {c for c, v in d["grading_key"]["codes"].items() if v is not None}
 labels = {k: ({kk: sorted(vv) for kk, vv in v.items()} if isinstance(v, dict) else sorted(v) if isinstance(v, set) else v)
           for k, v in labels.items()}
-(Path("half_labels.json")).write_text(json.dumps(labels, indent=2) + "\n")
+(Path("half_labels.json")).write_text(json.dumps(labels, indent=2) + "\n", encoding="utf-8")
 
 full_labels, full_template = tc.LABELS, tc.TEMPLATE
 half_template = copy.deepcopy(full_template)
@@ -49,7 +49,7 @@ stats = {"train": [0, 0, 0], "test": [0, 0, 0]}   # files, files-with-warnings, 
 for group, files in (("train", train), ("test", test)):
     for p in files:
         got = tc.convert(p)
-        truth = json.loads(p.with_suffix(".common.json").read_text())
+        truth = json.loads(p.with_suffix(".common.json").read_text(encoding="utf-8"))
         ok = strip(got) == strip(truth)
         stats[group][0] += 1; stats[group][1] += bool(got["warnings"]); stats[group][2] += not ok
         if got["warnings"] or not ok:
