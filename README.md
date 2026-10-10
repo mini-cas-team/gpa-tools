@@ -18,7 +18,11 @@ PDF — membership is a set, so the rulesets accumulate onto the same courses
 rather than competing — and each writes its own `rank_<id>_gpa.csv`/`.json` and
 `extracted/<student>.<id>.courses.json`.
 
-No model is called at run time. Reading a new transcript format is a
+No model is called at run time by `gpa_ana`. A separate pipeline that asks a
+local LLM instead (`upload`, `llm_category`, `browser_view`) is described in
+[LLM pipeline](#llm-pipeline-upload--llm_category--browser_view).
+
+For `gpa_ana` itself, no model is called at run time. Reading a new transcript format is a
 design-time activity that produces a profile YAML; the shipped app is ordinary
 deterministic Python.
 
@@ -124,6 +128,155 @@ paths, which is the point -- it reads a transcript folder already on the machine
 and writes results next to it. Flask's development server is what `--host`
 binds, and neither it nor the path fields belong on a network without
 authentication and a path allowlist in front of them.
+
+## LLM pipeline: upload → llm_category → browser_view
+
+A second, separate way to rank students: a local LLM decides which courses
+belong to a category, instead of a hand-written ruleset. It shares nothing with
+`gpa_ana` except `config.yaml`, and it reads transcripts through its own
+converter.
+
+```
+PDF ──► upload ──► <name>.txt + <name>.common.json ──► llm_category ──► rank_<cat>_gpa.csv
+        pdftotext   (common format, gpa_4 per course)   Ollama yes/no     <cat>_courses.csv
+                                                         per course
+                         browser_view: Upload tab drives both; View tab reads the CSVs
+```
+
+### Settings
+
+```yaml
+# config.yaml
+pdf-folder: /home/personal/Templates/transcripts   # PDFs to convert
+out-folder: /home/personal/Templates/out           # results go to <out-folder>/llm_category/
+work-folder: /home/personal/Templates/work         # .txt and .common.json (and uploaded PDFs)
+log-folder: /home/personal/Templates/log           # upload.log, llm_category.log, browser_view.log
+min-category-courses: 4      # fewer category courses than this -> gate=fail, held back
+
+llm-category:
+  model: qwen2.5:3b          # any model in `ollama list`
+  ollama-url: http://localhost:11434
+
+category-definitions:        # written by the LLM, edit freely
+  STEM: STEM stands for Science, Technology, Engineering, and Mathematics. ...
+```
+
+`gpa_ana` still requires its own `category:` key; without it, only this
+pipeline runs from this config.
+
+### 1. upload: PDF to common JSON
+
+```bash
+.venv312/bin/python -m upload            # every PDF in pdf-folder
+```
+
+For each PDF it writes two files into `work-folder`:
+
+- `<name>.txt`, from `pdftotext -layout`.
+- `<name>.common.json`, the common transcript format from
+  `upload/common/txt2common.py`, with `gpa` and `gpa_4` added per course by
+  `add_gpa.py`. This is what llm_category reads.
+
+There is no OCR here: a scanned PDF without a text layer is reported and
+skipped. Files with the same name are replaced.
+
+### 2. llm_category: LLM category membership and ranking
+
+Needs [Ollama](https://ollama.com) running locally with the model pulled:
+
+```bash
+ollama pull qwen2.5:3b
+.venv312/bin/python -m llm_category --category STEM
+.venv312/bin/python -m llm_category --category STEM --limit 3   # quick test on 3 students
+```
+
+What a run does:
+
+1. **Definition.** It looks the category up in `category-definitions`. If the
+   category is missing, the LLM writes a two-or-three-sentence definition and
+   it is saved there. People can then edit it; the edited text is what every
+   later question uses.
+2. **Membership.** For every distinct course (code + title) across all
+   students, it asks the LLM a yes/no question: "using only that definition,
+   is this course in the category?" Answers are constrained to `yes`/`no` by a
+   JSON schema, at temperature 0, so the same question gets the same answer.
+3. **Ranking.** Per student: credit-weighted average of `gpa_4` over the
+   category courses, the all-courses average, and the category's share. A
+   student with fewer than `min-category-courses` category courses gets
+   `gate=fail` and is held back.
+
+It writes into `<out-folder>/llm_category/`:
+
+| file | contents |
+|---|---|
+| `rank_<cat>_gpa.csv` | one row per student, same columns as gpa_ana's ranking CSV |
+| `<cat>_courses.csv` | every counted course with the LLM's `is_<cat>` answer |
+| `cache_<cat>.json` | the LLM's answers, and timing used for estimates |
+
+**The cache is what makes reruns fast.** It is keyed by course and stamped
+with a hash of the model and the definition:
+
+- Same definition and model: every saved answer is reused, no LLM calls, and
+  the two CSVs are rebuilt in seconds from the current `.common.json` files.
+- Edited definition or different model: the saved answers are discarded and
+  every distinct course is asked again. That is roughly 400 courses for 64
+  students, at about 13–16 s each on a CPU-only laptop, so 1.5–2 hours.
+- New students: only courses not seen before are asked.
+- Answers are saved one by one, so an interrupted run resumes where it stopped.
+- The prompt wording in `llm_category/llm.py` is **not** part of the stamp.
+  After changing a prompt, delete `cache_<cat>.json` by hand.
+
+`llm_category/archive/definitions.yaml` keeps earlier definitions, such as
+STEM, for restoring later.
+
+### 3. browser_view: the web UI
+
+```bash
+.venv312/bin/python -m browser_view      # http://127.0.0.1:5001
+```
+
+| flag | |
+|---|---|
+| `-c PATH` | config file (default `config.yaml`) |
+| `--host` / `--port` | bind address, default `127.0.0.1:5001` |
+| `--debug` | Flask reloader and tracebacks |
+
+**Upload tab.** Two panels, each with its own scroll bar.
+
+- *Left, Upload:* choose PDFs to upload, or leave it empty to convert the whole
+  `pdf-folder`. Each becomes `.txt` and `.common.json` in `work-folder`, as
+  with `python -m upload`. Uploaded PDFs are saved there too, so View can open
+  them.
+- *Right, Categories:* an action bar of **Category** (dropdown), **Update** and
+  **Add**. With no `category-definitions`, only Add is shown.
+  - The dropdown shows the selected category's definition, read-only. It
+    starts on the first one in `config.yaml`.
+  - **Update** makes the definition editable, with **Go** and **Cancel**. Go
+    saves the text to `config.yaml` and runs llm_category in the background,
+    with a progress bar and time left. When it finishes, the panel shows the
+    definition the run used and an *Open in View* link.
+  - **Add** shows a **Name** box with **Go** and **Cancel**. Go asks the LLM
+    for a definition (this takes 1–4 minutes), saves it to `config.yaml`, and
+    switches to Update so you can edit it before ranking.
+  - While Update or Add is active, the other button and the dropdown are
+    disabled. One run at a time is allowed.
+
+**View tab.** The same ranking view as `gpa_ana.web`, reading
+`rank_<cat>_gpa.csv` from the chosen folder (default
+`<out-folder>/llm_category`). Click a student to see their courses, marked by
+the LLM's answer, next to the transcript PDF. It also reads a gpa_ana output
+folder.
+
+The same caution as `gpa_ana.web` applies: this is a localhost tool for one
+operator, and the folder fields are real server paths.
+
+### Accuracy so far
+
+On the 64-student corpus, qwen2.5:3b agrees with gpa_ana's STEM ruleset on
+about 94% of course decisions. Nearly all disagreements are courses gpa_ana
+counts and the LLM rejects, such as College Algebra, Calculus and Data
+Structures. Prompt wording, model size and the definition text are the knobs
+for tuning this.
 
 ## Design: two independent axes
 
@@ -314,6 +467,12 @@ gpa_ana/
   validate.py     the gates
   rank.py         aggregation and ranking
   cli.py          python -m gpa_ana
+upload/           PDF -> .txt + .common.json (python -m upload)
+  common/         txt2common, add_gpa, label and grade-scale tables
+llm_category/     LLM category membership and ranking (python -m llm_category)
+  llm.py          the Ollama prompts
+  store.py        category-definitions in config.yaml, answer cache
+browser_view/     Flask UI: Upload and View tabs (python -m browser_view)
 tests/
 ```
 
