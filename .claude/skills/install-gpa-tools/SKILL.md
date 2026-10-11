@@ -43,7 +43,11 @@ python3 install/check.py             # JSON, when you need a detail
 It reports the OS, RAM, GPU, free disk, Python and venv, pdftotext, the
 Ollama binary, whether a server answers at
 `http://localhost:11434` (and at any `ollama-url` already in config.yaml) with
-its models, the config.yaml folders, and `recommended_model`.
+its models, the config.yaml folders, the llm builder's and the definer's
+model, and `recommended_model`. If `config.outdated` is not empty, config.yaml
+is from before category builders: tell the user which keys are no longer read,
+then run configure.py with the model and URL they had there and delete the
+old block once the user agrees.
 
 If no Python runs at all, do step 1b first and then run `check.py` with
 `uv run --python 3.12 install/check.py --text`.
@@ -93,7 +97,9 @@ b. **No Python 3.12** (or a failed a): install `uv` for this user, and let it
 ## Step 3 — folders and config.yaml
 
 **Ask** where the data should live. Offer the default `~/gpa-tools-data`, which
-gets the subfolders `transcripts/`, `work/`, `out/` and `log/`. Also ask
+gets the subfolders `transcripts/` (PDFs), `work/` (converted transcripts,
+and one `work/<builder>/` folder per category builder), `out/` (the published
+`<cat>_gpa.csv` files other applications read) and `log/`. Also ask
 whether they already have a folder of transcript PDFs to use as `pdf-folder`.
 
 ```bash
@@ -171,6 +177,9 @@ python3 install/ollama_check.py ask  <url> <model>   # one real yes/no question;
 $PY install/configure.py --model <model> --ollama-url <url>
 ```
 
+If the user wants the definer on a bigger model, `pull` that one too and add
+`--definer-model <it>`; otherwise the definer uses the same model.
+
 Run `pull` in the background with a long timeout, and tell the user it's
 downloading.
 
@@ -186,7 +195,8 @@ If the transcripts folder already has PDFs, offer to convert them:
 
 Then tell the user:
 - what was installed and where, and what was skipped because it was already there
-- the model and the ollama-url saved in config.yaml
+- the model and the ollama-url saved in config.yaml (builder `llm`, and the
+  definer's model if different)
 - how to start the app: `$PY -m browser_view`, then open http://127.0.0.1:5001
   (in VS Code, the "browser-view: web UI" launch entry)
 - the first category: on the Upload tab, Add, then a name such as STEM.

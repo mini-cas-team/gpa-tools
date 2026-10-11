@@ -240,18 +240,32 @@ def ollama_info(config: dict) -> dict:
     env_host = os.environ.get("OLLAMA_HOST")
     if env_host:
         info["OLLAMA_HOST"] = env_host
-    configured = llm_settings(config).get("ollama-url")
-    urls = [DEFAULT_OLLAMA_URL] + [u for u in (configured,) if u and u.rstrip("/") != DEFAULT_OLLAMA_URL]
+    configured = (llm_settings(config).get("ollama-url"), definer_settings(config).get("ollama-url"))
+    urls = [DEFAULT_OLLAMA_URL]
+    for u in configured:
+        if u and u.rstrip("/") not in [x.rstrip("/") for x in urls]:
+            urls.append(u)
     info["servers"] = [probe_ollama(u) for u in urls]
     return info
 
 
 # ---- config ----------------------------------------------------------------
 
+# Keys an older config.yaml may still have, and what replaced them.
+OUTDATED_KEYS = {"llm-category": "category-builder: llm: (model, ollama-url)"}
+
+
 def llm_settings(config: dict) -> dict:
     """config.yaml's category-builder: llm: section."""
     builders = config.get("category-builder") or {}
     return (builders.get("llm") if isinstance(builders, dict) else None) or {}
+
+
+def definer_settings(config: dict) -> dict:
+    """category-definer:, with the keys it leaves out taken from the llm builder."""
+    own = config.get("category-definer")
+    llm = {k: v for k, v in llm_settings(config).items() if k in ("model", "ollama-url")}
+    return {"provider": "ollama", **llm, **(own if isinstance(own, dict) else {})}
 
 
 def read_config() -> tuple[dict, str]:
@@ -278,6 +292,11 @@ def config_info(config: dict, status: str) -> dict:
     llm = llm_settings(config)
     info["model"] = llm.get("model")
     info["ollama-url"] = llm.get("ollama-url")
+    info["active-category-builder"] = config.get("active-category-builder")
+    definer = definer_settings(config)
+    info["definer"] = {k: definer.get(k) for k in ("provider", "model", "ollama-url")}
+    # An older config.yaml: those keys are ignored now; configure.py won't move them.
+    info["outdated"] = {k: v for k, v in OUTDATED_KEYS.items() if k in config}
     info["tool-folders"] = tool_folders(config)
     return info
 
@@ -324,7 +343,12 @@ def as_text(r: dict) -> str:
     for s in ol["servers"]:
         lines.append(f"  {s['url']}: " + (f"answers, version {s['version']}, models: {', '.join(s['models']) or 'none'}"
                                           if s["reachable"] else f"no answer ({s['error']})"))
-    lines.append(f"config    {c['status']}; model {c['model']}; ollama-url {c['ollama-url']}")
+    lines.append(f"config    {c['status']}; builder {c['active-category-builder']}; "
+                 f"llm model {c['model']}; ollama-url {c['ollama-url']}")
+    d = c["definer"]
+    lines.append(f"  definer: {d['provider']} {d['model']} at {d['ollama-url']}")
+    for key, instead in c["outdated"].items():
+        lines.append(f"  OUTDATED: '{key}:' is no longer read; use {instead}")
     for key in ("pdf-folder", "work-folder", "out-folder", "log-folder"):
         if key in c:
             lines.append(f"  {key}: {c[key]['value']}" + ("" if c[key]["exists"] else "  (does not exist)"))

@@ -161,3 +161,31 @@ def test_tool_folders_go_first_on_path(monkeypatch, tmp_path):
     add_tool_folders(str(tmp_path))  # a bare string, and no duplicate
     add_tool_folders(None)
     assert os.environ["PATH"].split(os.pathsep) == [str(tmp_path), "/usr/bin"]
+
+
+def test_check_reports_builder_definer_and_outdated_keys(monkeypatch):
+    new = {"active-category-builder": "llm",
+           "category-builder": {"llm": {"model": "small", "ollama-url": "http://a:1"}},
+           "category-definer": {"model": "big"}}
+    info = check.config_info(new, "present")
+    assert (info["model"], info["ollama-url"], info["active-category-builder"]) == \
+        ("small", "http://a:1", "llm")
+    assert info["definer"] == {"provider": "ollama", "model": "big", "ollama-url": "http://a:1"}
+    assert info["outdated"] == {}
+    old = check.config_info({"llm-category": {"model": "m"}}, "present")
+    assert old["model"] is None and "llm-category" in old["outdated"]
+
+    monkeypatch.setattr(check, "ollama_binary", lambda: None)
+    monkeypatch.setattr(check, "probe_ollama", lambda url: {"url": url})
+    new["category-definer"]["ollama-url"] = "http://b:2"
+    assert [s["url"] for s in check.ollama_info(new)["servers"]] == \
+        [check.DEFAULT_OLLAMA_URL, "http://a:1", "http://b:2"]
+
+
+def test_configure_points_out_an_outdated_llm_category_block(tmp_path, capsys):
+    config = tmp_path / "config.yaml"
+    config.write_text("llm-category:\n  model: old\n", encoding="utf-8")
+    assert configure.main(["--config", str(config), "--model", "new", "--no-mkdir"]) == 0
+    assert "'llm-category:' is from an older config.yaml" in capsys.readouterr().out
+    cfg = yaml.safe_load(config.read_text(encoding="utf-8"))
+    assert cfg["category-builder"]["llm"]["model"] == "new" and cfg["llm-category"] == {"model": "old"}

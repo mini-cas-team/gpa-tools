@@ -201,6 +201,9 @@ def main(argv=None) -> int:
         print(f"  {'.'.join(path)}: {_get(parsed, path)}")
     if parsed.get("tool-folders"):
         print(f"  tool-folders: {parsed['tool-folders']}")
+    if "llm-category" in parsed:
+        print("  note: 'llm-category:' is from an older config.yaml and is no longer read; "
+              "its settings now live under category-builder: llm:. Delete it by hand.")
     return 0
 
 

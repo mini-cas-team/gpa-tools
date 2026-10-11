@@ -21,7 +21,7 @@ location), and runs the scripts below.
 | `get_tools.py` | Installs poppler (pdftotext) into `.tools/` with micromamba. | any Python 3.8+ |
 | `get_ollama.py` | Installs Ollama for this user and starts it. Does nothing if a server already answers. | the venv's Python |
 | `ollama_check.py` | `probe URL`, `pull URL MODEL`, `ask URL MODEL` (one real yes/no question). | any Python 3.8+ |
-| `configure.py` | Creates config.yaml from its built-in template, or updates it: folders, model, ollama-url, tool-folders. | the venv's Python |
+| `configure.py` | Creates config.yaml from its built-in template, or updates it: folders, tool-folders, and the model and ollama-url of `category-builder: llm:` and `category-definer:` (`--model` sets both; `--definer-model` gives the definer its own). | the venv's Python |
 
 ## By hand
 
@@ -60,6 +60,10 @@ $PY -m browser_view                                 # http://127.0.0.1:5001
 
 Changing the model later discards the llm builder's cached answers, so the next
 run asks every course again.
+
+The definer drafts one definition per category, so it can afford a bigger
+model than the builder, which answers hundreds of questions:
+`configure.py --model qwen2.5:3b --definer-model qwen2.5:7b` (pull both).
 
 ## Where things go
 
