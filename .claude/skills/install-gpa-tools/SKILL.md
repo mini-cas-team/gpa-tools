@@ -1,6 +1,6 @@
 ---
 name: install-gpa-tools
-description: Install gpa-tools on this machine and get it running - Python venv and packages, pdftotext, Ollama, an LLM model sized to the machine's RAM and GPU, and config.yaml (folders, model, ollama-url). Use when the user asks to install, set up or repair gpa-tools or its dependencies, when config.yaml is missing, or when Ollama/the model is not reachable.
+description: Install gpa-tools on this machine and get it running - Python venv and packages, pdftotext, Ollama, an LLM model sized to the machine's RAM and GPU, the optional TypeSafe jev builder (API key in an environment variable), and config.yaml (folders, model, ollama-url, active builder). Use when the user asks to install, set up or repair gpa-tools or its dependencies, to add or fix the jev builder, when config.yaml is missing, or when Ollama/the model/TypeSafe is not reachable.
 ---
 
 # Installing gpa-tools
@@ -22,6 +22,9 @@ report in plain text or JSON; this file says in what order and what to ask.
   marked **Ask** below.
 - **Report faithfully.** If a step fails, show its output and stop that step.
   Don't paper over it.
+- **Never handle the TypeSafe API key.** Don't create it, ask for it in chat,
+  print it, or write it into any file. The user creates it and exports it
+  themselves; config.yaml holds only the variable's *name* (`api-key-env`).
 
 ## Paths per OS
 
@@ -44,7 +47,9 @@ It reports the OS, RAM, GPU, free disk, Python and venv, pdftotext, the
 Ollama binary, whether a server answers at
 `http://localhost:11434` (and at any `ollama-url` already in config.yaml) with
 its models, the config.yaml folders, the llm builder's and the definer's
-model, and `recommended_model`. If `config.outdated` is not empty, config.yaml
+model, `recommended_model`, and the jev builder: its model, whether the key
+variable is set in this shell (never its value) and, if so, whether TypeSafe
+accepts the key and the model. If `config.outdated` is not empty, config.yaml
 is from before category builders: tell the user which keys are no longer read,
 then run configure.py with the model and URL they had there and delete the
 old block once the user agrees.
@@ -183,7 +188,54 @@ If the user wants the definer on a bigger model, `pull` that one too and add
 Run `pull` in the background with a long timeout, and tell the user it's
 downloading.
 
-## Step 6 — verify and hand over
+## Step 6 — the jev builder (TypeSafe), optional
+
+Two category builders decide which courses are in a category:
+
+- **llm** — the local Ollama model from steps 4–5. Free and offline, but slow
+  on a CPU (1.5–2 hours for ~400 courses) and a small model misses obvious
+  courses (Data Structures, College Algebra).
+- **jev** — TypeSafe's hosted Jev model. Needs internet, a TypeSafe account
+  and an API key. ~400 courses take a few seconds and cost well under a cent
+  ($0.042 per million input tokens, output free). It gives each course a 0–1
+  score, kept in `<cat>_courses.csv`.
+
+**Ask** whether to set up jev, and if so whether it should be the active
+builder (the one the Upload and View tabs start with). The default is llm.
+If check.py already shows jev with the key set and the model accepted, skip
+to the `ask` below.
+
+1. The user creates a key: TypeSafe console (https://console.typesafe.ai) →
+   **API Keys**, then copies it. The account needs a balance; the console
+   shows it, and runs fail with "out of funds" at $0.00.
+2. The user stores it in an environment variable, `GPA_TOOLS_KEY` by default,
+   **themselves** — tell them not to paste it here:
+   - Linux/macOS: `export GPA_TOOLS_KEY="<key>"` in `~/.bashrc` or `~/.zshrc`,
+     then a new terminal.
+   - Windows: `setx GPA_TOOLS_KEY "<key>"` in a terminal, then a new terminal.
+
+   If they picked another name, use it as `--jev-key-env` / `--key-env` below.
+3. Check it. Claude Code's shell may not read the profile, so on Linux/macOS
+   run these through `bash -ic '…'` (or `zsh -ic`) if the variable shows as
+   not set:
+   ```bash
+   python3 install/jev_check.py probe                 # free: is the key accepted
+   python3 install/jev_check.py ask jev-1.13.0        # one real question, ~$0.00002
+   ```
+   Use a versioned model (`jev-1.13.0`) so cached scores don't change under
+   the user when TypeSafe ships a new release; `jev-latest` follows releases.
+   Plain `jev` is not a model name: the API answers "Unknown model: jev".
+4. Save it:
+   ```bash
+   $PY install/configure.py --jev-model jev-1.13.0                        # keep llm active
+   $PY install/configure.py --jev-model jev-1.13.0 --active-builder jev   # make jev active
+   ```
+
+The definer that drafts missing category definitions still uses Ollama, so
+keep steps 4–5 even with jev active, unless the user will write every
+definition by hand (`llm_category/archive/definitions.yaml` has STEM).
+
+## Step 7 — verify and hand over
 
 ```bash
 python3 install/check.py --text
@@ -197,6 +249,9 @@ Then tell the user:
 - what was installed and where, and what was skipped because it was already there
 - the model and the ollama-url saved in config.yaml (builder `llm`, and the
   definer's model if different)
+- if jev was set up: its model, the key variable's name, and which builder is
+  active. The app reads the key at run time, so it must start from a shell
+  where the variable is set (not from a launcher that skips the profile)
 - how to start the app: `$PY -m browser_view`, then open http://127.0.0.1:5001
   (in VS Code, the "browser-view: web UI" launch entry)
 - the first category: on the Upload tab, Add, then a name such as STEM.
@@ -211,6 +266,7 @@ Then tell the user:
 - **macOS:** delete `~/Applications/Ollama.app`.
 - **Windows:** use Settings → Apps → Ollama.
 - Models are in `~/.ollama/models`.
+- **jev:** delete the key in the TypeSafe console and remove the `export` (or, on Windows, `setx GPA_TOOLS_KEY ""` / Settings → environment variables).
 
 ## Troubleshooting
 
@@ -221,3 +277,7 @@ Then tell the user:
 | `model "…" not found` | Not pulled on *that* server: run `ollama_check.py pull <url> <model>`. |
 | The first `ask` takes a minute | Loading the model. Later answers take a few seconds with a GPU, 10–20 s on a CPU. |
 | `bind: address already in use` from `ollama serve` | Another Ollama (maybe a system install) already holds port 11434. Use that one. |
+| `GPA_TOOLS_KEY is not set` / `The TypeSafe API key is not set` | The shell or app didn't load the profile. Open a new terminal, or on Linux/macOS run through `bash -ic`. On Windows, `setx` only affects new terminals. |
+| `HTTP 401` from TypeSafe | Wrong or revoked key: create a new one in the console and re-export it. |
+| `Unknown model: …` | Not a TypeSafe model name: `jev_check.py probe` lists aliases; versioned IDs like `jev-1.13.0` work too. |
+| `out of funds` | The TypeSafe balance is $0.00; the user adds funds in the console. |

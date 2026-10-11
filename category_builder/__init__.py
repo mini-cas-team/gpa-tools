@@ -7,8 +7,8 @@ into its own folder, ``<work-folder>/<name>/`` (see ``common.write_outputs``):
     <cat>_gpa.csv       one row per student: category GPA and course counts
     <cat>_courses.csv   one row per course, with its in-category flag
 
-It may keep any working files of its own there too (llm keeps its answer
-cache).  Builders provide data only: ranking is done by whoever reads the
+It may keep any working files of its own there too (llm and jev keep their
+answer caches).  Builders provide data only: ranking is done by whoever reads the
 CSV (the View tab sorts its columns).  out_builder publishes ``<cat>_gpa.csv``
 to out-folder.
 
@@ -31,6 +31,7 @@ from types import ModuleType
 # name -> module implementing the builder functions above
 BUILDERS = {
     "llm": "llm_category.builder",
+    "jev": "jev_category.builder",
 }
 DEFAULT_BUILDER = "llm"
 

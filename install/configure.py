@@ -5,6 +5,9 @@
 
 --model and --ollama-url set both the llm category builder and the
 category-definer; --definer-model then gives the definer its own model.
+--jev-model and --jev-key-env set the jev builder (TypeSafe); the key itself
+never goes in config.yaml, only the name of the variable holding it.
+--active-builder picks the builder the Upload and View tabs start with.
 
 Without config.yaml, it is created from TEMPLATE below. Only the keys
 given on the command line change; every other line, comments included, is
@@ -37,7 +40,7 @@ TEMPLATE = """\
 pdf-folder: ~/gpa-tools-data/transcripts # transcript PDFs to read
 work-folder: ~/gpa-tools-data/work # .txt/.common.json; builders keep their files in <work-folder>/<builder>/
 out-folder: ~/gpa-tools-data/out # published <cat>_gpa.csv, for other applications
-log-folder: ~/gpa-tools-data/log # upload.log, llm_category.log, browser_view.log
+log-folder: ~/gpa-tools-data/log # upload.log, llm_category.log, jev_category.log, browser_view.log
 
 # --- View tab -------------------------------------------------------------------
 min-category-courses: 4 # hide students with fewer category courses
@@ -57,6 +60,12 @@ category-builder:
   llm: # a local LLM answers yes/no per course
     model: qwen2.5:3b # any model in `ollama list`; the installer picks one for this machine
     ollama-url: http://localhost:11434
+  jev: # TypeSafe's Jev scores each course 0-1 (hosted; needs an API key)
+    model: jev-1.13.0 # a version pins it; `jev-latest` follows new releases
+    api-url: https://api.typesafe.ai/v1/systemone
+    api-key-env: GPA_TOOLS_KEY # name of the env var holding the key; never put the key here
+    threshold: 0.5 # a course is in the category when Jev's score is above this
+    batch-size: 20 # courses per request
 
 # --- category-definer: drafts a definition for the user to edit -------------------
 category-definer:
@@ -143,6 +152,10 @@ def main(argv=None) -> int:
     ap.add_argument("--model", help="the llm builder's model (and the definer's)")
     ap.add_argument("--definer-model", help="category-definer's model, if different")
     ap.add_argument("--ollama-url")
+    ap.add_argument("--jev-model", help="the jev builder's TypeSafe model, e.g. jev-1.13.0")
+    ap.add_argument("--jev-key-env", help="name of the env var holding the TypeSafe API key")
+    ap.add_argument("--active-builder", choices=("llm", "jev"),
+                    help="the builder the Upload and View tabs start with")
     ap.add_argument("--tool-folder", action="append", default=[],
                     help="add a folder holding pdftotext (repeatable)")
     ap.add_argument("--no-mkdir", action="store_true", help="do not create the folders")
@@ -157,6 +170,8 @@ def main(argv=None) -> int:
         given = getattr(args, key.replace("-", "_"))
         if given or args.data:
             wanted[key] = path_value(given or str(Path(args.data).expanduser() / sub))
+    if args.active_builder:
+        wanted["active-category-builder"] = args.active_builder
     for key, value in wanted.items():
         text = set_top(text, key, scalar(value))
 
@@ -166,6 +181,8 @@ def main(argv=None) -> int:
     nested += [(("category-definer", k), v)
                for k, v in (("model", args.definer_model or args.model),
                             ("ollama-url", args.ollama_url)) if v]
+    nested += [(("category-builder", "jev", k), v)
+               for k, v in (("model", args.jev_model), ("api-key-env", args.jev_key_env)) if v]
     for (*parents, key), value in nested:
         text = set_nested(text, parents, key, scalar(value))
 
@@ -196,8 +213,10 @@ def main(argv=None) -> int:
     print(f"{'created' if created else 'updated'} {path}")
     for key in FOLDERS:
         print(f"  {key}: {parsed.get(key)}")
+    print(f"  active-category-builder: {parsed.get('active-category-builder')}")
     for path in (("category-builder", "llm", "model"), ("category-builder", "llm", "ollama-url"),
-                 ("category-definer", "model")):
+                 ("category-definer", "model"), ("category-builder", "jev", "model"),
+                 ("category-builder", "jev", "api-key-env")):
         print(f"  {'.'.join(path)}: {_get(parsed, path)}")
     if parsed.get("tool-folders"):
         print(f"  tool-folders: {parsed['tool-folders']}")

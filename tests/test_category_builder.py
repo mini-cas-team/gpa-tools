@@ -10,10 +10,10 @@ from conftest import FakeLLM, common_json
 
 
 def test_registry_has_llm_and_rejects_unknown_names():
-    assert category_builder.names() == ["llm"]
+    assert category_builder.names() == ["llm", "jev"]
     assert category_builder.get("llm").NAME == "llm"
     with pytest.raises(category_builder.UnknownBuilder, match="known: llm"):
-        category_builder.get("jev")
+        category_builder.get("nope")
 
 
 def test_every_registered_builder_has_the_contract():
@@ -94,7 +94,7 @@ def test_out_builder_copies_only_the_gpa_csv(tmp_path):
     with pytest.raises(FileNotFoundError, match="no law_gpa.csv from the llm builder"):
         out_builder.publish(cfg, "llm", "LAW")
     with pytest.raises(category_builder.UnknownBuilder):
-        out_builder.publish(cfg, "jev", "STEM")
+        out_builder.publish(cfg, "nope", "STEM")
 
 
 def test_out_builder_cli(tmp_path, capsys):

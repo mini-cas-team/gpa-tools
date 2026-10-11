@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -24,6 +25,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 VENV = PROJECT_ROOT / ".venv312"
 TOOLS_DIR = PROJECT_ROOT / ".tools"  # micromamba + its env, made by get_tools.py
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
+# The jev builder's defaults (jev_category/builder.py DEFAULTS; repeated here
+# because this file must run before the venv and PyYAML exist).
+JEV_DEFAULTS = {"model": "jev-1.13.0", "api-url": "https://api.typesafe.ai/v1/systemone",
+                "api-key-env": "GPA_TOOLS_KEY"}
 PYTHON_WANTED = (3, 12)
 
 # Download sizes, for the free-disk check.
@@ -249,6 +254,48 @@ def ollama_info(config: dict) -> dict:
     return info
 
 
+# ---- TypeSafe (jev builder) ------------------------------------------------
+
+def jev_models_url(api_url: str) -> str:
+    """GET /v1/models next to the evaluation endpoint POST /v1/systemone."""
+    return api_url.rstrip("/").rsplit("/", 1)[0] + "/models"
+
+
+def probe_jev(api_url: str, key: str, timeout: float = 10) -> dict:
+    """Whether TypeSafe answers and accepts the key; the model names it lists.
+    Listing models is free (no tokens)."""
+    url = jev_models_url(api_url)
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}",
+                                               "User-Agent": "gpa-tools"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            models = [m["name"] for m in json.loads(resp.read()).get("models", [])]
+    except urllib.error.HTTPError as exc:
+        return {"url": url, "reachable": True, "authorized": exc.code not in (401, 403),
+                "error": f"HTTP {exc.code} {exc.reason}"}
+    except (OSError, ValueError, KeyError) as exc:  # URLError is an OSError
+        return {"url": url, "reachable": False, "error": str(getattr(exc, "reason", exc))}
+    return {"url": url, "reachable": True, "authorized": True, "models": models}
+
+
+def jev_model_ok(model: str, listed: list[str]) -> bool:
+    """The API lists only aliases (jev-latest, ...) but accepts versioned IDs too."""
+    return model in listed or bool(re.fullmatch(r"jev-\d+\.\d+\.\d+", model or ""))
+
+
+def jev_info(config: dict) -> dict:
+    """The jev builder's settings, whether its key variable is set (never its
+    value), and, when it is, whether the API accepts it and knows the model."""
+    s = jev_settings(config)
+    info = {"model": s["model"], "api-url": s["api-url"], "api-key-env": s["api-key-env"],
+            "key_set": bool(os.environ.get(s["api-key-env"], "").strip())}
+    if info["key_set"]:
+        info["api"] = probe_jev(s["api-url"], os.environ[s["api-key-env"]].strip())
+        if "models" in info["api"]:
+            info["model_ok"] = jev_model_ok(s["model"], info["api"]["models"])
+    return info
+
+
 # ---- config ----------------------------------------------------------------
 
 # Keys an older config.yaml may still have, and what replaced them.
@@ -259,6 +306,13 @@ def llm_settings(config: dict) -> dict:
     """config.yaml's category-builder: llm: section."""
     builders = config.get("category-builder") or {}
     return (builders.get("llm") if isinstance(builders, dict) else None) or {}
+
+
+def jev_settings(config: dict) -> dict:
+    """config.yaml's category-builder: jev: section, over the builder's defaults."""
+    builders = config.get("category-builder") or {}
+    own = (builders.get("jev") if isinstance(builders, dict) else None) or {}
+    return {**JEV_DEFAULTS, **own}
 
 
 def definer_settings(config: dict) -> dict:
@@ -293,6 +347,8 @@ def config_info(config: dict, status: str) -> dict:
     info["model"] = llm.get("model")
     info["ollama-url"] = llm.get("ollama-url")
     info["active-category-builder"] = config.get("active-category-builder")
+    builders = config.get("category-builder") or {}
+    info["jev-configured"] = isinstance(builders, dict) and "jev" in builders
     definer = definer_settings(config)
     info["definer"] = {k: definer.get(k) for k in ("provider", "model", "ollama-url")}
     # An older config.yaml: those keys are ignored now; configure.py won't move them.
@@ -318,6 +374,7 @@ def gather() -> dict:
         "python": python_info(),
         "tools": tools_info(config),
         "ollama": ollama_info(config),
+        "jev": jev_info(config),
         "config": config_info(config, status),
     }
 
@@ -347,6 +404,17 @@ def as_text(r: dict) -> str:
                  f"llm model {c['model']}; ollama-url {c['ollama-url']}")
     d = c["definer"]
     lines.append(f"  definer: {d['provider']} {d['model']} at {d['ollama-url']}")
+    j = r["jev"]
+    jev = (f"  jev: {j['model']}" + ("" if c["jev-configured"] else " (default; no category-builder: jev: section)")
+           + f"; key in ${j['api-key-env']}: {'set' if j['key_set'] else 'not set'}")
+    api = j.get("api")
+    if api:
+        if "models" in api:
+            jev += f"; API accepts the key, models: {', '.join(api['models'])}"
+            jev += "" if j["model_ok"] else f"; MODEL {j['model']} NOT ACCEPTED"
+        else:
+            jev += f"; API: {api['error']}"
+    lines.append(jev)
     for key, instead in c["outdated"].items():
         lines.append(f"  OUTDATED: '{key}:' is no longer read; use {instead}")
     for key in ("pdf-folder", "work-folder", "out-folder", "log-folder"):

@@ -11,7 +11,7 @@ The easy way: start Claude Code in the project root and type
 
 Claude follows `.claude/skills/install-gpa-tools/SKILL.md`. It checks the
 machine, shows a plan, asks a few questions (data folder, model, Ollama
-location), and runs the scripts below.
+location, whether to add the TypeSafe jev builder), and runs the scripts below.
 
 ## The scripts
 
@@ -21,7 +21,8 @@ location), and runs the scripts below.
 | `get_tools.py` | Installs poppler (pdftotext) into `.tools/` with micromamba. | any Python 3.8+ |
 | `get_ollama.py` | Installs Ollama for this user and starts it. Does nothing if a server already answers. | the venv's Python |
 | `ollama_check.py` | `probe URL`, `pull URL MODEL`, `ask URL MODEL` (one real yes/no question). | any Python 3.8+ |
-| `configure.py` | Creates config.yaml from its built-in template, or updates it: folders, tool-folders, and the model and ollama-url of `category-builder: llm:` and `category-definer:` (`--model` sets both; `--definer-model` gives the definer its own). | the venv's Python |
+| `jev_check.py` | `probe` (is the TypeSafe key accepted; free), `ask [MODEL]` (one real question). Reads the key from `$GPA_TOOLS_KEY` (`--key-env` for another name) and never prints it. | any Python 3.8+ |
+| `configure.py` | Creates config.yaml from its built-in template, or updates it: folders, tool-folders, and the model and ollama-url of `category-builder: llm:` and `category-definer:` (`--model` sets both; `--definer-model` gives the definer its own), `category-builder: jev:` (`--jev-model`, `--jev-key-env`) and `--active-builder llm\|jev`. | the venv's Python |
 
 ## By hand
 
@@ -44,6 +45,12 @@ $PY install/get_ollama.py
 python3 install/ollama_check.py pull http://localhost:11434 qwen2.5:3b
 python3 install/ollama_check.py ask  http://localhost:11434 qwen2.5:3b
 $PY install/configure.py --model qwen2.5:3b --ollama-url http://localhost:11434
+
+# optional: the jev builder. Create a key in https://console.typesafe.ai (API Keys),
+# put `export GPA_TOOLS_KEY="<key>"` in ~/.bashrc (Windows: setx), open a new shell.
+python3 install/jev_check.py probe
+python3 install/jev_check.py ask jev-1.13.0
+$PY install/configure.py --jev-model jev-1.13.0 --active-builder jev
 
 $PY -m browser_view                                 # http://127.0.0.1:5001
 ```
@@ -73,6 +80,7 @@ model than the builder, which answers hundreds of questions:
 | poppler | `.tools/` in the project (git-ignored), listed under `tool-folders:` in config.yaml |
 | Ollama | Linux: `~/.local/ollama`, a systemd user service. macOS: `~/Applications/Ollama.app`. Windows: `%LOCALAPPDATA%\Programs\Ollama` |
 | models | `~/.ollama/models` |
+| TypeSafe API key | an environment variable (`GPA_TOOLS_KEY`) in the user's shell profile; config.yaml only names it |
 | config | `config.yaml` in the project (tracked in git; `configure.py` holds the template for a fresh one) |
 
 Only Linux has been tested end to end. The macOS and Windows steps follow

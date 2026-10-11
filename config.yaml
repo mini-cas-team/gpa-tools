@@ -16,11 +16,17 @@ min-category-courses: 4 # View tab: hide students with fewer category courses
 # Each reads the *.common.json in work-folder and writes <cat>_gpa.csv and
 # <cat>_courses.csv into <work-folder>/<builder>/. python -m out_builder copies
 # <cat>_gpa.csv to out-folder (the Upload tab does that after each run).
-active-category-builder: llm # the default in the Upload and View tabs
+active-category-builder: jev # the default in the Upload and View tabs
 category-builder:
   llm: # a local LLM answers yes/no per course; logs to <log-folder>/llm_category.log
     model: qwen2.5:3b # any model in `ollama list`
     ollama-url: http://localhost:11434
+  jev: # TypeSafe's Jev scores each course 0-1; logs to <log-folder>/jev_category.log
+    model: jev-1.13.0 # a version pins it; `jev-latest` follows new releases
+    api-url: https://api.typesafe.ai/v1/systemone
+    api-key-env: GPA_TOOLS_KEY # name of the env var holding the key; never put the key here
+    threshold: 0.5 # a course is in the category when Jev's score is above this
+    batch-size: 20 # courses per request
 
 # --- category-definer: drafts a definition for the user to edit -------------------
 category-definer:

@@ -82,8 +82,11 @@ def test_set_nested_goes_two_levels_deep():
 def test_template_is_valid_yaml_with_every_key():
     cfg = yaml.safe_load(configure.TEMPLATE)
     assert set(configure.FOLDERS) <= set(cfg)
-    assert cfg["category-builder"] == {"llm": {"model": "qwen2.5:3b",
-                                               "ollama-url": "http://localhost:11434"}}
+    assert cfg["category-builder"]["llm"] == {"model": "qwen2.5:3b",
+                                              "ollama-url": "http://localhost:11434"}
+    assert cfg["category-builder"]["jev"] == {
+        "model": "jev-1.13.0", "api-url": "https://api.typesafe.ai/v1/systemone",
+        "api-key-env": "GPA_TOOLS_KEY", "threshold": 0.5, "batch-size": 20}
     assert cfg["active-category-builder"] == "llm"
     assert cfg["category-definer"]["provider"] == "ollama"
     assert cfg["category-definitions"] == {}
@@ -189,3 +192,59 @@ def test_configure_points_out_an_outdated_llm_category_block(tmp_path, capsys):
     assert "'llm-category:' is from an older config.yaml" in capsys.readouterr().out
     cfg = yaml.safe_load(config.read_text(encoding="utf-8"))
     assert cfg["category-builder"]["llm"]["model"] == "new" and cfg["llm-category"] == {"model": "old"}
+
+
+def test_configure_sets_jev_and_the_active_builder(tmp_path, capsys):
+    import jev_category.builder as jev_run
+
+    config = tmp_path / "config.yaml"
+    assert configure.main(["--config", str(config), "--data", str(tmp_path / "d"), "--no-mkdir",
+                           "--jev-model", "jev-latest", "--jev-key-env", "MY_KEY",
+                           "--active-builder", "jev"]) == 0
+    cfg = yaml.safe_load(config.read_text(encoding="utf-8"))
+    assert cfg["active-category-builder"] == "jev"
+    assert cfg["category-builder"]["jev"]["model"] == "jev-latest"
+    assert cfg["category-builder"]["jev"]["api-key-env"] == "MY_KEY"
+    assert "active-category-builder: jev # the default" in config.read_text(encoding="utf-8")
+    assert "category-builder.jev.model: jev-latest" in capsys.readouterr().out
+    loaded = jev_run.load_config(config)
+    assert (loaded["model"], loaded["key_env"]) == ("jev-latest", "MY_KEY")
+
+
+def test_check_reports_jev_without_revealing_the_key(monkeypatch):
+    monkeypatch.delenv("GPA_TOOLS_KEY", raising=False)
+    info = check.jev_info({})
+    assert info == {"model": "jev-1.13.0", "api-url": "https://api.typesafe.ai/v1/systemone",
+                    "api-key-env": "GPA_TOOLS_KEY", "key_set": False}
+
+    probed = []
+    monkeypatch.setenv("K", "secret-value")
+    monkeypatch.setattr(check, "probe_jev", lambda url, key: probed.append(key) or
+                        {"reachable": True, "authorized": True, "models": ["jev-latest"]})
+    info = check.jev_info({"category-builder": {"jev": {"model": "jev", "api-key-env": "K"}}})
+    assert probed == ["secret-value"] and info["key_set"] and info["model_ok"] is False
+    assert "secret-value" not in str(info)
+    assert check.jev_model_ok("jev-1.13.0", []) and check.jev_model_ok("jev-latest", ["jev-latest"])
+    assert check.jev_models_url("https://api.typesafe.ai/v1/systemone") == \
+        "https://api.typesafe.ai/v1/models"
+
+
+def test_jev_check_needs_the_key_and_asks_one_question(monkeypatch, capsys):
+    import jev_check
+
+    monkeypatch.delenv("GPA_TOOLS_KEY", raising=False)
+    assert jev_check.main(["ask"]) == 1
+    assert "GPA_TOOLS_KEY is not set" in capsys.readouterr().out
+
+    class FakeClient:
+        def __init__(self, url, model, key):
+            self.model = model
+
+        def scores(self, category, definition, courses):
+            return [0.97], {"input_tokens": 384}
+
+    monkeypatch.setenv("GPA_TOOLS_KEY", "secret-value")
+    monkeypatch.setattr("jev_category.client.JevClient", FakeClient)
+    assert jev_check.main(["ask", "jev-1.13.0"]) == 0
+    out = capsys.readouterr().out
+    assert '"score": 0.97' in out and "secret-value" not in out

@@ -26,6 +26,7 @@ class Course:
     credits: float
     gpa_4: float
     in_category: bool | None = None
+    score: float | None = None  # builders that score membership 0-1 (jev) set this
 
 
 @dataclass
@@ -112,9 +113,10 @@ def write_outputs(students: list[Student], category: str, folder: Path) -> tuple
     with courses_csv.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(["student", "file", "term", "code", "title", "grade", "credits", "gpa_4",
-                    f"is_{slug}"])
+                    f"is_{slug}", f"{slug}_score"])
         for s in students:
             for c in s.courses:
                 w.writerow([s.name, s.file, c.term, c.code, c.title, c.grade, c.credits, c.gpa_4,
-                            "yes" if c.in_category else "no"])
+                            "yes" if c.in_category else "no",
+                            "" if c.score is None else round(c.score, 4)])
     return gpa_csv, courses_csv

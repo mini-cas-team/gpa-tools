@@ -109,7 +109,7 @@ def test_view_explains_missing_results_and_unknown_builders(client, folders):
         path.unlink()
     assert "has no results" in client.get("/view").get_data(as_text=True)
     assert "unknown category builder" in client.get(
-        "/view", query_string={"builder": "jev"}).get_data(as_text=True)
+        "/view", query_string={"builder": "nope"}).get_data(as_text=True)
 
 
 def test_view_never_reads_out_folder(client, folders, tmp_path):
@@ -150,7 +150,7 @@ def test_view_rejects_paths_unknown_students_categories_and_builders(client, fol
     for name in ("../config.yaml", "nobody.pdf", ""):
         assert courses_for(client, name).status_code == 404
     assert courses_for(client, "ann.pdf", category="LAW").status_code == 404
-    assert courses_for(client, "ann.pdf", builder="jev").status_code == 404
+    assert courses_for(client, "ann.pdf", builder="nope").status_code == 404
     assert client.get("/view/pdf", query_string={"file": "../config.yaml"}).status_code == 404
 
 
@@ -230,7 +230,7 @@ def fake_llm(monkeypatch):
 def test_categories_list_config_definitions_in_file_order(client, folders):
     data = client.get("/categories").get_json()
     assert data == {"categories": {"STEM": "Science and maths."}, "names": ["STEM"],
-                    "path": str(folders[1]), "builders": ["llm"], "active_builder": "llm"}
+                    "path": str(folders[1]), "builders": ["llm", "jev"], "active_builder": "llm"}
     config = folders[1]
     config.write_text(config.read_text().replace(
         "  STEM: Science and maths.\n", "  ZOO: Animals.\n  STEM: Science and maths.\n"))
@@ -332,7 +332,7 @@ def test_run_goes_in_the_background_then_publishes(client, monkeypatch, folders,
     monkeypatch.setattr(llm_builder, "run", fake_run)
     assert client.get("/runs/status").get_json() == {"status": "idle"}
     assert client.post("/runs", data={"category": "LAW"}).status_code == 404
-    assert client.post("/runs", data={"category": "stem", "builder": "jev"}).status_code == 400
+    assert client.post("/runs", data={"category": "stem", "builder": "nope"}).status_code == 400
     assert client.post("/runs", data={"category": "stem", "builder": "llm"}).get_json()["status"] \
         in ("running", "done")
     state = wait_for_job(client)

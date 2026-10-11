@@ -52,14 +52,20 @@ sudo apt install poppler-utils                  # pdftotext
 pdf-folder: /home/personal/Templates/transcripts   # PDFs to convert
 work-folder: /home/personal/Templates/work         # .txt, .common.json, uploaded PDFs; <builder>/ folders
 out-folder: /home/personal/Templates/out           # published <cat>_gpa.csv, for other applications
-log-folder: /home/personal/Templates/log           # upload.log, llm_category.log, browser_view.log
+log-folder: /home/personal/Templates/log           # upload.log, llm_category.log, jev_category.log, browser_view.log
 min-category-courses: 4      # View tab: hide students with fewer category courses
 
-active-category-builder: llm # the default in the Upload and View tabs and the CLI
+active-category-builder: jev # the default in the Upload and View tabs and the CLI
 category-builder:            # one section per builder
   llm:
     model: qwen2.5:3b        # any model in `ollama list`
     ollama-url: http://localhost:11434
+  jev:
+    model: jev-1.13.0        # a version pins it; `jev-latest` follows new releases
+    api-url: https://api.typesafe.ai/v1/systemone
+    api-key-env: GPA_TOOLS_KEY   # env var holding the TypeSafe API key; never the key itself
+    threshold: 0.5           # in the category when Jev's score is above this
+    batch-size: 20           # courses per request
 
 category-definer:            # drafts definitions; keys left out fall back to category-builder.llm
   provider: ollama
@@ -92,6 +98,7 @@ skipped. Files with the same name are replaced.
 .venv312/bin/python -m category_builder --category STEM              # the active builder
 .venv312/bin/python -m category_builder --category STEM --builder llm --publish
 .venv312/bin/python -m llm_category --category STEM --limit 3       # llm only, 3 students
+.venv312/bin/python -m jev_category --category STEM                 # jev only
 ```
 
 A builder reads every `*.common.json` in `work-folder` and writes into its own
@@ -100,8 +107,8 @@ folder, `<work-folder>/<builder>/`:
 | file | contents |
 |---|---|
 | `<cat>_gpa.csv` | one row per student: category GPA, all-courses GPA, category and total course counts, category share |
-| `<cat>_courses.csv` | every counted course with its `is_<cat>` flag |
-| anything else | the builder's own working files (llm: `cache_<cat>.json`) |
+| `<cat>_courses.csv` | every counted course with its `is_<cat>` flag, and `<cat>_score` (0–1) from builders that score (jev) |
+| anything else | the builder's own working files (llm, jev: `cache_<cat>.json`) |
 
 Builders provide data, not a ranking: there is no rank column and no one is
 left out. Rank by sorting the View tab's columns, or however the application
@@ -112,11 +119,11 @@ reading the CSV wants.
 one as a starting point and saves it; edit it before (re)building. Drafting
 is separate from building, so it can use another model or provider.
 
-**Adding a builder** (e.g. `jev`): write a module with `load_config(config_path)`
+**Adding a builder** (e.g. `mine`): write a module with `load_config(config_path)`
 (returning at least `folder`), `run(cfg, category, progress=None)` and
 optionally `estimate(cfg, category, definition)`; have it write its CSVs with
 `category_builder.common.write_outputs`; add one line to `BUILDERS` in
-`category_builder/__init__.py` and a `category-builder: jev:` section to
+`category_builder/__init__.py` and a `category-builder: mine:` section to
 config.yaml. The Upload and View tabs list it from then on.
 
 #### The llm builder
@@ -143,6 +150,27 @@ definition:
 
 `llm_category/archive/definitions.yaml` keeps earlier definitions, such as
 STEM, for restoring later.
+
+#### The jev builder
+
+Uses [TypeSafe](https://docs.typesafe.ai)'s hosted Jev model. Create an API
+key in the TypeSafe console (API Keys) and export it in the variable that
+`api-key-env` names, e.g. `export GPA_TOOLS_KEY=...` in `~/.bashrc`; the key
+never goes in config.yaml, which is in git.
+
+For every distinct course it asks one Noul question ("using only
+`definition`, is the course in the category?") and gets back the probability
+of yes. `batch-size` courses go in one request, answered in parallel; all
+~400 STEM courses take a few seconds and cost well under a cent (input tokens
+only; the run logs the count). A course is in the category when its score is
+above `threshold`, and the score is kept in `<cat>_courses.csv`: scores near
+the threshold are the borderline courses worth a look, and usually mean the
+definition should say which side they are on.
+
+The cache, `<work-folder>/jev/cache_<cat>.json`, works like the llm builder's
+(stamped with model and definition) but stores scores, so changing
+`threshold` needs no new API calls. The model is pinned to a version so
+cached scores and new ones come from the same model; change it on purpose.
 
 ### 3. out_builder: publish to out-folder
 
