@@ -1,7 +1,6 @@
-"""Install pdftotext/pdftoppm (poppler) and tesseract without admin rights.
+"""Install pdftotext (poppler) without admin rights.
 
-    python3 install/get_tools.py              # poppler + tesseract
-    python3 install/get_tools.py --no-ocr     # poppler only (enough for upload/llm_category)
+    python3 install/get_tools.py
     python3 install/get_tools.py --dry-run
 
 Downloads micromamba (one file) into .tools/, then makes a conda-forge
@@ -72,11 +71,10 @@ def fetch_micromamba() -> Path:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--no-ocr", action="store_true", help="skip tesseract (only gpa_ana's scanned PDFs need it)")
     ap.add_argument("--dry-run", action="store_true", help="say what would happen, change nothing")
     args = ap.parse_args(argv)
 
-    packages = ["poppler"] + ([] if args.no_ocr else ["tesseract"])
+    packages = ["poppler"]
     command = [str(micromamba_path()), "create", "--yes", "--prefix", str(ENV),
                "--channel", "conda-forge", *packages]
     if args.dry_run:
@@ -96,7 +94,7 @@ def main(argv=None) -> int:
         return 1
 
     folder = bin_folder()
-    names = ["pdftotext", "pdftoppm"] + ([] if args.no_ocr else ["tesseract"])
+    names = ["pdftotext"]
     suffix = ".exe" if os.name == "nt" else ""
     missing = [n for n in names if not (folder / (n + suffix)).exists()]
     if missing:

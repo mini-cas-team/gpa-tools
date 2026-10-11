@@ -17,11 +17,11 @@ location), and runs the scripts below.
 
 | script | does | needs |
 |---|---|---|
-| `check.py` | Reports OS, RAM, GPU, disk, Python/venv, pdftotext/tesseract, Ollama (binary, server, models), config.yaml, and the recommended model. Changes nothing. | any Python 3.8+ |
-| `get_tools.py` | Installs poppler (pdftotext, pdftoppm) and tesseract into `.tools/` with micromamba. | any Python 3.8+ |
+| `check.py` | Reports OS, RAM, GPU, disk, Python/venv, pdftotext, Ollama (binary, server, models), config.yaml, and the recommended model. Changes nothing. | any Python 3.8+ |
+| `get_tools.py` | Installs poppler (pdftotext) into `.tools/` with micromamba. | any Python 3.8+ |
 | `get_ollama.py` | Installs Ollama for this user and starts it. Does nothing if a server already answers. | the venv's Python |
 | `ollama_check.py` | `probe URL`, `pull URL MODEL`, `ask URL MODEL` (one real yes/no question). | any Python 3.8+ |
-| `configure.py` | Creates config.yaml from `config.example.yaml`, or updates it: folders, model, ollama-url, tool-folders. | the venv's Python |
+| `configure.py` | Creates config.yaml from its built-in template, or updates it: folders, model, ollama-url, tool-folders. | the venv's Python |
 
 ## By hand
 
@@ -58,7 +58,7 @@ $PY -m browser_view                                 # http://127.0.0.1:5001
 | 8 GB+ RAM otherwise (a CPU-only machine stays on 3b: 7b is about 2.5 times slower) | `qwen2.5:3b` |
 | under 8 GB RAM | `qwen2.5:1.5b` |
 
-Changing the model later discards llm_category's cached answers, so the next
+Changing the model later discards the llm builder's cached answers, so the next
 run asks every course again.
 
 ## Where things go
@@ -66,10 +66,10 @@ run asks every course again.
 | what | where |
 |---|---|
 | venv | `.venv312/` in the project |
-| poppler, tesseract | `.tools/` in the project (git-ignored), listed under `tool-folders:` in config.yaml |
+| poppler | `.tools/` in the project (git-ignored), listed under `tool-folders:` in config.yaml |
 | Ollama | Linux: `~/.local/ollama`, a systemd user service. macOS: `~/Applications/Ollama.app`. Windows: `%LOCALAPPDATA%\Programs\Ollama` |
 | models | `~/.ollama/models` |
-| config | `config.yaml` in the project (git-ignored; the template is `config.example.yaml`) |
+| config | `config.yaml` in the project (tracked in git; `configure.py` holds the template for a fresh one) |
 
 Only Linux has been tested end to end. The macOS and Windows steps follow
 Ollama's and micromamba's documented per-user installs, but haven't been run.

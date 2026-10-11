@@ -1,32 +1,25 @@
-"""Flask app for browsing category rankings.
+"""Flask app for running category builders and browsing their results.
 
     python3 -m browser_view          # http://127.0.0.1:5001
 
 Two tabs, opening on Upload: Upload converts uploaded PDFs (or every PDF in
 pdf-folder) to <name>.txt and <name>.common.json (with per-course GPA) in
-config.yaml's work-folder -- the input llm_category reads.  A Categories panel
-beside it lists config.yaml's category-definitions and adds a category: the
-LLM drafts a definition, the operator edits and saves it, and after a time
-estimate llm_category ranks every student on it in the background.  View reads the
-``rank_<id>_gpa.csv`` files in a results folder and shows one category's
-ranking as a table; clicking a student opens their course list beside the
-original PDF.  View is copied from gpa_ana's web UI, but reads the ranking
-CSV instead of gpa_ana's JSON, because llm_category and gpa_ana write that
-CSV with the same columns.
+config.yaml's work-folder -- the input every category builder reads.  A
+Categories panel beside it lists config.yaml's category-definitions and adds
+a category: category-definer drafts a definition, the operator edits and
+saves it, and after a time estimate the selected builder runs on it in the
+background; out_builder then publishes the result to out-folder.  View reads
+one builder's ``<cat>_gpa.csv`` from <work-folder>/<builder>/ and shows it as
+a sortable table; clicking a student opens their course list (from
+``<cat>_courses.csv``) beside the original PDF.
 
-Courses for the student dialog come from llm_category's
-``<id>_courses.csv``; a gpa_ana results folder has no such file, so its
-``extracted/<student>.<id>.courses.json`` is used instead.
-
-Independent of gpa_ana: nothing is imported from it.  Like gpa_ana's UI,
-this is a localhost tool for one operator -- it binds to 127.0.0.1 and the
-folder field is a real server path.  Do not expose it to a network.
+This is a localhost tool for one operator -- it binds to 127.0.0.1 and serves
+files from the configured folders.  Do not expose it to a network.
 """
 
 from __future__ import annotations
 
 import csv
-import json
 import logging
 import re
 import shutil
@@ -39,16 +32,16 @@ from urllib.parse import urlencode
 import yaml
 from flask import Flask, abort, jsonify, render_template, request, send_file
 
-import llm_category.__main__ as llm_run
-from llm_category.llm import OllamaClient
-from llm_category.store import Definitions
+import category_builder
+from category_builder import definer
+from category_builder.common import RunError, courses_csv_name
+from category_builder.definitions import Definitions
+from out_builder import publish
 from upload.convert import add_tool_folders, pdf_to_common_json
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024  # a transcript is well under 1 MB
 log = logging.getLogger("browser_view")
-# Written by gpa_ana's web runs: where that run's PDFs live.
-SOURCES_FILE = "sources.json"
 
 
 def _load_config(config_path: Path) -> dict:
@@ -59,21 +52,21 @@ def _load_config(config_path: Path) -> dict:
         return {}
 
 
-def _default_folder(cfg: dict) -> Path:
-    """llm_category's results when they exist, else the plain out-folder."""
-    out = Path(cfg.get("out-folder") or "out").expanduser()
-    return out / "llm_category" if (out / "llm_category").is_dir() else out
-
-
-def _ranked_categories(folder: Path) -> dict[str, Path]:
-    """{CATEGORY: rank csv} for every ranking written into ``folder``."""
+def _built_categories(folder: Path) -> dict[str, Path]:
+    """{CATEGORY: <cat>_gpa.csv} for every category a builder wrote into ``folder``."""
     if not folder.is_dir():
         return {}
     found = {}
-    for path in sorted(folder.glob("rank_*_gpa.csv")):
-        slug = path.name[len("rank_"):-len("_gpa.csv")]
-        found[slug.upper()] = path
+    for path in sorted(folder.glob("*_gpa.csv")):
+        found[path.name[:-len("_gpa.csv")].upper()] = path
     return found
+
+
+def _builder_folder(cfg: dict, raw_name: str | None) -> tuple[str, Path]:
+    """(builder, its work folder); the active builder when none is asked for."""
+    name = raw_name or category_builder.active(cfg)
+    category_builder.get(name)  # UnknownBuilder for a name not in the registry
+    return name, category_builder.folder(cfg, name)
 
 
 def _num(raw: str | None, kind=float):
@@ -87,10 +80,9 @@ def _num(raw: str | None, kind=float):
 
 
 def _student_row(row: dict, category: str) -> dict:
-    """One ranking CSV row, under the names the copied View template uses."""
+    """One <cat>_gpa.csv row, under the names the View template uses."""
     slug = category.lower()
     return {
-        "rank": _num(row.get("rank"), int),
         "student": row.get("student") or "",
         "institution": row.get("institution") or "",
         "program": row.get("program") or "",
@@ -99,23 +91,13 @@ def _student_row(row: dict, category: str) -> dict:
         "category_courses": _num(row.get(f"{slug}_courses"), int),
         "total_courses": _num(row.get("total_courses"), int),
         "category_course_pct": _num(row.get(f"{slug}_all_pct")),
-        "gate": (row.get("gate") or "").strip(),
         "file": row.get("file") or "",
     }
 
 
-def _read_ranking(path: Path, category: str) -> dict:
+def _read_students(path: Path, category: str) -> list[dict]:
     with path.open(newline="", encoding="utf-8") as fh:
-        rows = [_student_row(r, category) for r in csv.DictReader(fh)]
-    # gpa_ana's CSV holds only ranked students; llm_category's also lists the
-    # ones below the course minimum, with gate=fail and no rank.
-    ranked = [r for r in rows if r["gate"] != "fail" and r["rank"] is not None]
-    held = [
-        {**r, "reason": f"only {r['category_courses'] or 0} {category} course(s), "
-                        "below the minimum"}
-        for r in rows if r not in ranked
-    ]
-    return {"category": category, "ranked": ranked, "held_back": held}
+        return [_student_row(r, category) for r in csv.DictReader(fh)]
 
 
 def _courses_from_csv(path: Path, category: str, name: str) -> list[dict]:
@@ -133,21 +115,9 @@ def _courses_from_csv(path: Path, category: str, name: str) -> list[dict]:
                 "credits": _num(row.get("credits")),
                 "grade_points_4pt": _num(row.get("gpa_4")),
                 "in_category": row.get(flag) == "yes",
-                # llm_category writes only courses that count toward GPA.
+                # Builders write only courses that count toward GPA.
                 "counts_toward_gpa": True,
             })
-    return courses
-
-
-def _courses_from_extracted(folder: Path, category: str, name: str) -> list[dict] | None:
-    slug = category.lower()
-    path = folder / "extracted" / f"{Path(name).stem}.{slug}.courses.json"
-    if not path.is_file():
-        return None
-    courses = json.loads(path.read_text(encoding="utf-8")).get("courses", [])
-    # gpa_ana flags membership under the category's own key ("stem", "law", ...).
-    for course in courses:
-        course["in_category"] = bool(course.pop(slug, False))
     return courses
 
 
@@ -172,16 +142,11 @@ def _collect_pdfs(files, pdf_folder: str, staging: Path) -> tuple[list[Path], st
     return found, str(folder)
 
 
-def _find_pdf(folder: Path, name: str, cfg: dict) -> Path | None:
-    """The original PDF behind a result: work-folder, the folder a gpa_ana web
-    run recorded, then config.yaml's pdf-folder."""
+def _find_pdf(name: str, cfg: dict) -> Path | None:
+    """The original PDF behind a result: work-folder, then config.yaml's pdf-folder."""
     candidates = []
     if cfg.get("work-folder"):  # the Upload tab keeps uploaded PDFs there
         candidates.append(Path(cfg["work-folder"]).expanduser())
-    try:
-        candidates.append(Path(json.loads((folder / SOURCES_FILE).read_text(encoding="utf-8"))["pdf_folder"]))
-    except (OSError, ValueError, KeyError, TypeError):
-        pass
     if cfg.get("pdf-folder"):
         candidates.append(Path(cfg["pdf-folder"]).expanduser())
     for base in candidates:
@@ -197,16 +162,16 @@ def _bare_pdf_name(raw: str | None) -> str:
     return name if name.lower().endswith(".pdf") else ""
 
 
-# Used in file names (rank_<name>_gpa.csv) and CSV headers, so keep it plain.
+# Used in file names (<name>_gpa.csv) and CSV headers, so keep it plain.
 CATEGORY_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,39}$")
 CATEGORY_NAME_RULE = "use letters, digits and _, starting with a letter (at most 40)"
 
 
 class CategoryJob:
-    """The one background llm_category run the Upload tab can start.
+    """The one background builder run the Upload tab can start, then its publish.
 
-    Ollama answers one question at a time, so a second run would only queue
-    behind the first; one at a time is enforced instead.
+    One at a time across all builders: Ollama answers one question at a time,
+    so a second run would only queue behind the first.
     """
 
     def __init__(self):
@@ -220,27 +185,31 @@ class CategoryJob:
             state["elapsed"] = round((state.get("finished") or time.time()) - state["started"])
         return state
 
-    def start(self, cfg: dict, category: str) -> bool:
+    def start(self, raw: dict, builder: str, cfg: dict, category: str) -> bool:
+        """Run ``builder`` (its load_config result is ``cfg``), then publish to out-folder."""
         with self.lock:
             if self.state.get("status") == "running":
                 return False
-            self.state = {"status": "running", "category": category, "done": 0, "total": None,
-                          "started": time.time()}
-        threading.Thread(target=self._run, args=(cfg, category), daemon=True).start()
+            self.state = {"status": "running", "builder": builder, "category": category,
+                          "done": 0, "total": None, "started": time.time()}
+        threading.Thread(target=self._run, args=(raw, builder, cfg, category), daemon=True).start()
         return True
 
     def _progress(self, done: int, total: int) -> None:
         with self.lock:
             self.state.update(done=done, total=total)
 
-    def _run(self, cfg: dict, category: str) -> None:
+    def _run(self, raw: dict, builder: str, cfg: dict, category: str) -> None:
         try:
-            rank_csv, _ = llm_run.run(cfg, category, progress=self._progress)
+            gpa_csv = category_builder.get(builder).run(cfg, category, progress=self._progress)
+            published = publish(raw, builder, category)
         except Exception as exc:  # shown on the page; the thread must not die silently
-            log.exception("category run %s failed", category)
+            log.exception("%s run of %s failed", builder, category)
             update = {"status": "error", "error": str(exc)}
         else:
-            update = {"status": "done", "folder": str(rank_csv.parent)}
+            log.info("%s run of %s done; published %s", builder, category, published)
+            update = {"status": "done", "folder": str(gpa_csv.parent),
+                      "published": str(published)}
         with self.lock:
             self.state.update(update, finished=time.time())
 
@@ -274,25 +243,29 @@ def create_app(config_path: Path | None = None) -> Flask:
         """
         try:
             data = Definitions(config_path).data
-            return jsonify(categories=data, names=list(data), path=str(config_path))
+            return jsonify(categories=data, names=list(data), path=str(config_path),
+                           builders=category_builder.names(),
+                           active_builder=category_builder.active(_load_config(config_path)))
         except (OSError, yaml.YAMLError) as exc:
             return jsonify(error=f"could not read {config_path}: {exc}"), 500
 
     @app.post("/categories/draft")
     def draft_category():
-        """The LLM's proposed definition for a new category. Nothing is saved."""
+        """category-definer's proposed definition for a new category. Nothing is saved."""
         try:
             name = category_name(request.form.get("name"))
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
         if name in Definitions(config_path).data:
             return jsonify(error=f"{name} is already defined"), 409
-        cfg = llm_run.load_config(config_path)
-        client = OllamaClient(cfg["url"], cfg["model"])
+        cfg = _load_config(config_path)
         try:
-            definition = client.define(name)
-        except (OSError, ValueError, KeyError) as exc:  # URLError is an OSError
-            return jsonify(error=f"{cfg['model']} at {cfg['url']}: {exc}"), 502
+            definer_cfg = definer.load_config(cfg)
+            definition = definer.client(definer_cfg).define(name)
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except (OSError, KeyError) as exc:  # URLError is an OSError
+            return jsonify(error=f"{definer.describe(definer_cfg)}: {exc}"), 502
         return jsonify(name=name, definition=definition)
 
     @app.post("/categories")
@@ -321,31 +294,40 @@ def create_app(config_path: Path | None = None) -> Flask:
         log.info("category %s saved to %s", name, config_path)
         return jsonify(name=name, categories=definitions.data)
 
+    def chosen_builder(raw: str | None):
+        """(name, module, its config) for the builder a request names, else the active one."""
+        name = raw or category_builder.active(_load_config(config_path))
+        module = category_builder.get(name)
+        return name, module, module.load_config(config_path)
+
     @app.get("/runs/estimate")
     def run_estimate():
-        """How long ranking students on a saved category would take now."""
+        """How long building a saved category would take now (when the builder can tell)."""
         try:
             name = category_name(request.args.get("category"))
             definition = Definitions(config_path).data.get(name)
             if definition is None:
                 return jsonify(error=f"{name} is not defined"), 404
-            return jsonify(category=name,
-                           **llm_run.estimate(llm_run.load_config(config_path), name, definition))
-        except (ValueError, llm_run.RunError, OSError, KeyError) as exc:
+            builder, module, cfg = chosen_builder(request.args.get("builder"))
+            if not hasattr(module, "estimate"):
+                return jsonify(category=name, builder=builder, seconds=None, pending=None)
+            return jsonify(category=name, builder=builder,
+                           **module.estimate(cfg, name, definition))
+        except (ValueError, RunError, OSError, KeyError) as exc:
             return jsonify(error=str(exc)), 400
 
     @app.post("/runs")
     def start_run():
         try:
             name = category_name(request.form.get("category"))
-            cfg = llm_run.load_config(config_path)
+            builder, _, cfg = chosen_builder(request.form.get("builder"))
         except (ValueError, OSError, KeyError) as exc:
             return jsonify(error=str(exc)), 400
         if name not in Definitions(config_path).data:
             return jsonify(error=f"{name} is not defined"), 404
-        if not job.start(cfg, name):
+        if not job.start(_load_config(config_path), builder, cfg, name):
             return jsonify(error="a category run is already in progress", **job.snapshot()), 409
-        log.info("category run %s started", name)
+        log.info("%s run of %s started", builder, name)
         return jsonify(job.snapshot())
 
     @app.get("/runs/status")
@@ -394,77 +376,82 @@ def create_app(config_path: Path | None = None) -> Flask:
 
     @app.get("/view")
     def view():
-        default = _default_folder(_load_config(config_path))
-        folder = Path((request.args.get("folder") or str(default)).strip()).expanduser()
-        available = _ranked_categories(folder)
+        cfg = _load_config(config_path)
+        builders = category_builder.names()
+        try:
+            builder, folder = _builder_folder(cfg, request.args.get("builder"))
+        except (category_builder.UnknownBuilder, KeyError) as exc:
+            return render_template("view.html", tab="view", builders=builders,
+                                   builder=category_builder.active(cfg), categories=[],
+                                   selected="", students=None, folder="", min_courses=0,
+                                   error=str(exc).strip("'\""))
+        available = _built_categories(folder)
 
         selected = (request.args.get("category") or "").upper()
         if selected not in available:
             selected = next(iter(available), "")
 
-        ranking, error = None, None
+        students, error = None, None
         if selected:
             try:
-                ranking = _read_ranking(available[selected], selected)
+                students = _read_students(available[selected], selected)
             except (OSError, ValueError, csv.Error) as exc:
                 error = f"could not read {available[selected].name}: {exc}"
-        elif not folder.is_dir():
-            error = f"not a folder: {folder}"
         else:
-            error = f"no rankings (rank_*_gpa.csv) in {folder}"
+            error = f"the {builder} builder has no results (*_gpa.csv) in {folder} yet"
 
         return render_template(
             "view.html",
             tab="view",
+            builders=builders,
+            builder=builder,
             folder=folder,
             categories=list(available),
             selected=selected,
-            ranking=ranking,
+            students=students,
+            min_courses=int(cfg.get("min-category-courses") or 0),
             error=error,
         )
 
     @app.get("/view/courses")
     def view_courses():
         """One student's courses, for the View tab's dialog."""
-        folder = Path((request.args.get("folder") or "").strip()).expanduser()
+        cfg = _load_config(config_path)
+        try:
+            builder, folder = _builder_folder(cfg, request.args.get("builder"))
+        except (category_builder.UnknownBuilder, KeyError) as exc:
+            return jsonify(error=str(exc).strip("'\"")), 404
         category = (request.args.get("category") or "").upper()
-        available = _ranked_categories(folder)
+        available = _built_categories(folder)
         if category not in available:
-            return jsonify(error=f"no {category or 'category'} ranking in {folder}"), 404
+            return jsonify(error=f"no {category or 'category'} results from {builder}"), 404
 
         name = _bare_pdf_name(request.args.get("file"))
         try:
-            ranking = _read_ranking(available[category], category)
-            record = next(
-                (r for r in ranking["ranked"] + ranking["held_back"] if r["file"] == name), None
-            )
+            students = _read_students(available[category], category)
+            record = next((r for r in students if r["file"] == name), None)
             if not name or record is None:
-                return jsonify(error=f"{name or 'that student'} is not in this ranking"), 404
+                return jsonify(error=f"{name or 'that student'} is not in these results"), 404
 
-            courses_csv = folder / f"{category.lower()}_courses.csv"
-            if courses_csv.is_file():
-                courses = _courses_from_csv(courses_csv, category, name)
-            else:
-                courses = _courses_from_extracted(folder, category, name)
-            if courses is None:
+            courses_csv = folder / courses_csv_name(category)
+            if not courses_csv.is_file():
                 return jsonify(error=f"no course list for {name} in {folder}"), 404
+            courses = _courses_from_csv(courses_csv, category, name)
         except (OSError, ValueError, csv.Error) as exc:
             return jsonify(error=f"could not read courses: {exc}"), 500
 
-        pdf = _find_pdf(folder, name, _load_config(config_path))
+        pdf = _find_pdf(name, cfg)
         return jsonify({
             **record,
             "courses": courses,
             "credit_label": "Credits",
-            "pdf_url": f"/view/pdf?{urlencode({'folder': str(folder), 'file': name})}"
-            if pdf else None,
+            "pdf_url": f"/view/pdf?{urlencode({'file': name})}" if pdf else None,
         })
 
     @app.get("/view/pdf")
     def view_pdf():
-        folder = Path((request.args.get("folder") or "").strip()).expanduser()
         name = _bare_pdf_name(request.args.get("file"))
-        pdf = _find_pdf(folder, name, _load_config(config_path)) if name else None
+        pdf = _find_pdf(name, _load_config(config_path)) if name else None
         if pdf is None:
             abort(404)
         # Inline, so the browser's own PDF viewer shows it inside the dialog.

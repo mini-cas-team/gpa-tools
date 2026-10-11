@@ -1,6 +1,6 @@
 ---
 name: install-gpa-tools
-description: Install gpa-tools on this machine and get it running - Python venv and packages, pdftotext/tesseract, Ollama, an LLM model sized to the machine's RAM and GPU, and config.yaml (folders, model, ollama-url). Use when the user asks to install, set up or repair gpa-tools or its dependencies, when config.yaml is missing, or when Ollama/the model is not reachable.
+description: Install gpa-tools on this machine and get it running - Python venv and packages, pdftotext, Ollama, an LLM model sized to the machine's RAM and GPU, and config.yaml (folders, model, ollama-url). Use when the user asks to install, set up or repair gpa-tools or its dependencies, when config.yaml is missing, or when Ollama/the model is not reachable.
 ---
 
 # Installing gpa-tools
@@ -40,8 +40,8 @@ python3 install/check.py --text      # summary for you and the user
 python3 install/check.py             # JSON, when you need a detail
 ```
 
-It reports the OS, RAM, GPU, free disk, Python and venv, pdftotext, pdftoppm,
-tesseract, the Ollama binary, whether a server answers at
+It reports the OS, RAM, GPU, free disk, Python and venv, pdftotext, the
+Ollama binary, whether a server answers at
 `http://localhost:11434` (and at any `ollama-url` already in config.yaml) with
 its models, the config.yaml folders, and `recommended_model`.
 
@@ -72,17 +72,14 @@ b. **No Python 3.12** (or a failed a): install `uv` for this user, and let it
    A fresh `uv` isn't on PATH in the current shell yet. Call it by full
    path: `~/.local/bin/uv`, or `~/.local/bin/uv.exe` on Windows.
 
-## Step 2 — pdftotext (and tesseract)
+## Step 2 — pdftotext
 
-`pdftotext` is required: upload and gpa_ana both read PDFs with it.
-`pdftoppm` + `tesseract` are only for gpa_ana's scanned PDFs.
+`pdftotext` is required: upload reads every PDF with it.
 
-- `pdftotext` already found: skip, unless tesseract is missing and the user
-  wants scanned-PDF support (**Ask** whether they do).
+- `pdftotext` already found: skip.
 - Otherwise:
   ```bash
-  python3 install/get_tools.py            # poppler + tesseract: ~1-2 min, about 900 MB on disk
-  python3 install/get_tools.py --no-ocr   # poppler only
+  python3 install/get_tools.py            # poppler: a minute or so
   ```
   This downloads micromamba into `.tools/` and builds a conda-forge env in
   `.tools/env`, all inside the project and git-ignored. The last line printed
@@ -104,10 +101,10 @@ $PY install/configure.py --data ~/gpa-tools-data
 $PY install/configure.py --data ~/gpa-tools-data --pdf-folder "/path/to/their/pdfs"
 ```
 
-Without a config.yaml, this creates one from `config.example.yaml`. If one
+Without a config.yaml, this creates one from the template built into `configure.py`. If one
 already exists with folders that exist (check.py says so), **Ask** before
 changing them. `configure.py` only rewrites the keys it's given and creates the
-folders. config.yaml is git-ignored, so it's this machine's own.
+folders. config.yaml is tracked in git, so mention that the change shows up in `git status`.
 
 ## Step 4 — Ollama and its URL
 
@@ -163,8 +160,10 @@ comparable with earlier runs:
 
 **Ask** the user to accept it or pick another, and show the reason check.py
 gives. If config.yaml already names a different model, say that switching
-discards llm_category's cached answers, so the next run asks every course
-again (hours on a CPU).
+discards the llm builder's cached answers, so the next run asks every course
+again (hours on a CPU). `--model` sets both `category-builder.llm` and
+`category-definer`; add `--definer-model <bigger>` only if the user wants
+drafts from a stronger model than the classifier.
 
 ```bash
 python3 install/ollama_check.py pull <url> <model>   # skip if the server already lists it; minutes
@@ -179,7 +178,7 @@ downloading.
 
 ```bash
 python3 install/check.py --text
-$PY -m pytest tests/test_browser_view.py tests/test_install.py -q
+$PY -m pytest tests -q       # needs neither Ollama nor pdftotext
 ```
 
 If the transcripts folder already has PDFs, offer to convert them:
@@ -212,4 +211,3 @@ Then tell the user:
 | `model "…" not found` | Not pulled on *that* server: run `ollama_check.py pull <url> <model>`. |
 | The first `ask` takes a minute | Loading the model. Later answers take a few seconds with a GPU, 10–20 s on a CPU. |
 | `bind: address already in use` from `ollama serve` | Another Ollama (maybe a system install) already holds port 11434. Use that one. |
-| gpa_ana: `missing required key(s): category` | Add `category: [STEM]` to config.yaml (the template has it). |

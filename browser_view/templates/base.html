@@ -147,6 +147,7 @@
   }
   .category-bar { display: flex; gap: .5rem; align-items: center; }
   .category-bar select { flex: 1; width: auto; }
+  .category-bar select.builder { flex: 0 0 auto; }
   .category-bar label { margin: 0; color: var(--fg); font-weight: 600; }
   .category-bar label + button { margin-left: auto; }
   .progress { margin: .9rem 0 0; }
@@ -170,7 +171,7 @@
 <main>
   <header class="top">
     <h1>Browser View</h1>
-    <p class="sub">Browse category rankings written by llm_category (or gpa_ana).</p>
+    <p class="sub">Browse category rankings written by llm_category.</p>
     <nav class="tabs">
       <a href="/" {% if tab == "upload" %}class="active" aria-current="page"{% endif %}>Upload</a>
       <a href="/view" {% if tab == "view" %}class="active" aria-current="page"{% endif %}>View</a>

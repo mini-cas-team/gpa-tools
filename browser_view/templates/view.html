@@ -4,9 +4,13 @@
 
 {% block body %}
 <form id="view-form" method="get" action="/view" class="view-controls">
-  <div class="grow">
-    <label for="folder">Results folder</label>
-    <input type="text" id="folder" name="folder" value="{{ folder }}">
+  <div>
+    <label for="builder">Builder</label>
+    <select id="builder" name="builder">
+      {% for name in builders %}
+        <option value="{{ name }}" {% if name == builder %}selected{% endif %}>{{ name }}</option>
+      {% endfor %}
+    </select>
   </div>
   <div>
     <label for="category">Category</label>
@@ -16,21 +20,27 @@
       {% endfor %}
     </select>
   </div>
-  <button type="submit">Load</button>
+  {% if students is not none %}
+  <div>
+    <label for="min-courses">Min {{ selected }} courses</label>
+    <input type="number" id="min-courses" min="0" step="1" value="{{ min_courses }}" style="width:6rem">
+  </div>
+  {% endif %}
+  <button type="submit" class="secondary" title="Read the builder's folder again, e.g. after a run">Reload</button>
 </form>
 
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
 
-{% if ranking %}
-  {% set slug = selected|lower %}
-  <h2>{{ ranking.category }}</h2>
+{% if students is not none %}
+  <h2>{{ selected }}</h2>
   <p class="hint" style="margin-top:-.4rem">
-    Ranked by average {{ ranking.category }} GPA on a 0–4 scale.
-    Read from <code>{{ folder }}/rank_{{ slug }}_gpa.csv</code>.
+    Average {{ selected }} GPA on a 0–4 scale, from the {{ builder }} builder:
+    <code>{{ folder }}/{{ selected|lower }}_gpa.csv</code>.
     Click a column name to sort; click a student to see their transcript.
+    <span id="shown-count"></span>
   </p>
 
-  {% if ranking.ranked %}
+  {% if students %}
   {% macro num(value, digits) -%}
     <td class="num" data-sort="{{ value if value is not none else '' }}">
       {{- ('%.' ~ digits ~ 'f')|format(value) if value is not none else '–' -}}
@@ -40,25 +50,25 @@
   <table id="ranking">
     <thead>
       <tr>
-        <th class="num" data-type="num" aria-sort="ascending"><button type="button" class="sort">#</button></th>
         <th><button type="button" class="sort">Student</button></th>
         <th><button type="button" class="sort">Institution</button></th>
         <th><button type="button" class="sort">Program</button></th>
-        <th class="num" data-type="num"><button type="button" class="sort">{{ ranking.category }} GPA</button></th>
+        <th class="num" data-type="num" aria-sort="descending"><button type="button" class="sort">{{ selected }} GPA</button></th>
         <th class="num" data-type="num"><button type="button" class="sort">All-courses GPA</button></th>
-        <th class="num" data-type="num"><button type="button" class="sort">{{ ranking.category }} courses</button></th>
+        <th class="num" data-type="num"><button type="button" class="sort">{{ selected }} courses</button></th>
         <th class="num" data-type="num"><button type="button" class="sort">Total courses</button></th>
         <th class="num" data-type="num"><button type="button" class="sort">%</button></th>
       </tr>
     </thead>
     <tbody>
-      {% for r in ranking.ranked %}
-      <tr class="student" tabindex="0" data-file="{{ r.file }}">
-        {{ num(r.rank, 0) }}
+      {% for r in students %}
+      <tr class="student" tabindex="0" data-file="{{ r.file }}" data-index="{{ loop.index0 }}"
+          data-courses="{{ r.category_courses or 0 }}">
         <td>{{ r.student }}</td>
         <td>{{ r.institution or '' }}</td>
         <td>{{ r.program or '' }}</td>
-        <td class="num" data-sort="{{ r.gpa_capped }}"><strong>{{ '%.3f'|format(r.gpa_capped) }}</strong></td>
+        <td class="num" data-sort="{{ r.gpa_capped if r.gpa_capped is not none else '' }}"><strong>
+          {{- '%.3f'|format(r.gpa_capped) if r.gpa_capped is not none else '–' -}}</strong></td>
         {{ num(r.overall_gpa_capped, 3) }}
         {{ num(r.category_courses, 0) }}
         {{ num(r.total_courses, 0) }}
@@ -70,18 +80,7 @@
   </div>
   <div class="row-tip" id="row-tip" role="tooltip" hidden>Click the row to view student transcript details</div>
   {% else %}
-  <p class="panel">No student could be ranked in this category.</p>
-  {% endif %}
-
-  {% if ranking.held_back %}
-    <h3>Held back (not ranked)</h3>
-    <div class="panel">
-      <ul class="notes">
-        {% for h in ranking.held_back %}
-          <li><strong>{{ h.student }}</strong> ({{ h.file }}) — {{ h.reason }}</li>
-        {% endfor %}
-      </ul>
-    </div>
+  <p class="panel">No students in this file.</p>
   {% endif %}
 {% endif %}
 
@@ -101,8 +100,14 @@
 
 <script>
 (() => {
-  // Picking a category is the whole interaction, so load it straight away.
-  document.getElementById("category").addEventListener("change", (e) => e.target.form.submit());
+  // Picking a builder or category is the whole interaction, so load it straight away.
+  for (const id of ["builder", "category"]) {
+    document.getElementById(id).addEventListener("change", (e) => {
+      // A new builder has its own categories; let the server pick the first.
+      if (id === "builder") document.getElementById("category").disabled = true;
+      e.target.form.submit();
+    });
+  }
 
   const table = document.getElementById("ranking");
   if (!table) return;
@@ -114,11 +119,11 @@
   function sortBy(index) {
     const th = headers[index];
     const numeric = th.dataset.type === "num";
-    // First click: numbers high-to-low except rank, text A-Z; then toggle.
+    // First click: numbers high-to-low, text A-Z; then toggle.
     const current = th.getAttribute("aria-sort");
     const direction = current
       ? (current === "ascending" ? "descending" : "ascending")
-      : (numeric && index !== 0 ? "descending" : "ascending");
+      : (numeric ? "descending" : "ascending");
     const sign = direction === "ascending" ? 1 : -1;
 
     const key = (row) => {
@@ -132,7 +137,7 @@
       // Blanks sort last whichever way the column runs.
       if (x === "" || y === "") return (x === "") - (y === "");
       const order = numeric ? Number(x) - Number(y) : collator.compare(x, y);
-      return sign * order || Number(a.cells[0].dataset.sort) - Number(b.cells[0].dataset.sort);
+      return sign * order || Number(a.dataset.index) - Number(b.dataset.index);
     });
     body.append(...rows);
 
@@ -143,6 +148,22 @@
   headers.forEach((th, index) => {
     th.querySelector("button.sort").addEventListener("click", () => sortBy(index));
   });
+
+  // ---- minimum category courses: hide students below it ------------------
+  const minInput = document.getElementById("min-courses");
+  const shown = document.getElementById("shown-count");
+  function filter() {
+    const min = Number(minInput.value) || 0;
+    let count = 0;
+    for (const row of table.tBodies[0].rows) {
+      row.hidden = Number(row.dataset.courses) < min;
+      if (!row.hidden) count++;
+    }
+    const total = table.tBodies[0].rows.length;
+    shown.textContent = count === total ? `${total} students.`
+      : `Showing ${count} of ${total} students (at least ${min} ${category} courses).`;
+  }
+  minInput.addEventListener("input", filter);
 
   // ---- hover hint over the data rows (not the header) ---------------------
   const tip = document.getElementById("row-tip");
@@ -164,8 +185,9 @@
   const meta = document.getElementById("courses-meta");
   const pdfPane = document.getElementById("pdf-pane");
   const coursesPane = document.getElementById("courses-pane");
-  const folder = {{ folder|string|tojson }};
+  const builder = {{ builder|tojson }};
   const category = {{ selected|tojson }};
+  filter();
 
   dialog.querySelector(".close").addEventListener("click", () => dialog.close());
   // A click on the backdrop lands on the dialog element itself.
@@ -185,7 +207,7 @@
   function renderPdf(record) {
     if (!record.pdf_url) {
       pdfPane.replaceChildren(el("div",
-        `The original PDF (${record.file}) was not found in the folder this run read from.`, "error"));
+        `The original PDF (${record.file}) was not found in work-folder or pdf-folder.`, "error"));
       return;
     }
     const frame = el("iframe");
@@ -238,7 +260,7 @@
     coursesPane.replaceChildren();
     dialog.showModal();
     try {
-      const query = new URLSearchParams({ folder, category, file: row.dataset.file });
+      const query = new URLSearchParams({ builder, category, file: row.dataset.file });
       const response = await fetch(`/view/courses?${query}`);
       const data = await response.json().catch(() => ({ error: `server returned ${response.status}` }));
       if (!response.ok) throw new Error(data.error || `server returned ${response.status}`);

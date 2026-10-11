@@ -166,7 +166,7 @@ def python_info() -> dict:
         venv["version"] = run([str(venv_python), "-c", "import sys; print('%d.%d.%d' % sys.version_info[:3])"])
         missing = run([str(venv_python), "-c",
                        "import importlib.util as u; "
-                       "print(' '.join(m for m in ('yaml', 'flask', 'numpy', 'PIL', 'pytest') "
+                       "print(' '.join(m for m in ('yaml', 'flask', 'pytest') "
                        "if not u.find_spec(m)))"])
         venv["missing_packages"] = missing.split()
     return {"running": sys.version.split()[0], "candidates": found, "venv": venv,
@@ -188,14 +188,14 @@ def tool_folders(config: dict) -> list[str]:
 
 
 def tools_info(config: dict) -> dict:
-    """pdftotext/pdftoppm (poppler) and tesseract: on PATH or in tool-folders."""
+    """pdftotext (poppler): on PATH or in tool-folders."""
     search = os.pathsep.join(tool_folders(config) + [os.environ.get("PATH", "")])
     found = {}
-    for tool in ("pdftotext", "pdftoppm", "tesseract"):
+    for tool in ("pdftotext",):
         path = shutil.which(tool, path=search)
         entry = {"path": path}
         if path:
-            first = run([path, "-v"] if tool != "tesseract" else [path, "--version"]).splitlines()
+            first = run([path, "-v"]).splitlines()
             entry["version"] = first[0] if first else ""
         found[tool] = entry
     found["micromamba"] = {"path": shutil.which("micromamba") or _micromamba_local()}
@@ -240,13 +240,19 @@ def ollama_info(config: dict) -> dict:
     env_host = os.environ.get("OLLAMA_HOST")
     if env_host:
         info["OLLAMA_HOST"] = env_host
-    configured = (config.get("llm-category") or {}).get("ollama-url")
+    configured = llm_settings(config).get("ollama-url")
     urls = [DEFAULT_OLLAMA_URL] + [u for u in (configured,) if u and u.rstrip("/") != DEFAULT_OLLAMA_URL]
     info["servers"] = [probe_ollama(u) for u in urls]
     return info
 
 
 # ---- config ----------------------------------------------------------------
+
+def llm_settings(config: dict) -> dict:
+    """config.yaml's category-builder: llm: section."""
+    builders = config.get("category-builder") or {}
+    return (builders.get("llm") if isinstance(builders, dict) else None) or {}
+
 
 def read_config() -> tuple[dict, str]:
     """config.yaml as a dict (if PyYAML is importable here), and a status word."""
@@ -269,7 +275,7 @@ def config_info(config: dict, status: str) -> dict:
         if key in config:
             folder = Path(str(config[key])).expanduser()
             info[key] = {"value": str(config[key]), "exists": folder.is_dir()}
-    llm = config.get("llm-category") or {}
+    llm = llm_settings(config)
     info["model"] = llm.get("model")
     info["ollama-url"] = llm.get("ollama-url")
     info["tool-folders"] = tool_folders(config)
@@ -312,7 +318,7 @@ def as_text(r: dict) -> str:
                                                    f"{' '.join(p['venv']['missing_packages']) or 'nothing'})"
                                                    if p["venv"]["exists"] else ""),
     ]
-    for tool in ("pdftotext", "pdftoppm", "tesseract", "micromamba"):
+    for tool in ("pdftotext", "micromamba"):
         lines.append(f"{tool:<11}{t[tool]['path'] or 'not found'}")
     lines.append(f"ollama    {ol['binary'] or 'not found'}" + (f" ({ol['version']})" if ol["version"] else ""))
     for s in ol["servers"]:

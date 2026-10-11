@@ -3,7 +3,10 @@
     .venv312/bin/python install/configure.py --data ~/gpa-tools-data \\
         --model qwen2.5:3b --ollama-url http://localhost:11434
 
-Without config.yaml, it is created from config.example.yaml. Only the keys
+--model and --ollama-url set both the llm category builder and the
+category-definer; --definer-model then gives the definer its own model.
+
+Without config.yaml, it is created from TEMPLATE below. Only the keys
 given on the command line change; every other line, comments included, is
 kept as it is. The result is re-read to check it is valid YAML with the
 intended values before it replaces the old file.
@@ -23,8 +26,50 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG = PROJECT_ROOT / "config.yaml"
-EXAMPLE = PROJECT_ROOT / "config.example.yaml"
 FOLDERS = {"pdf-folder": "transcripts", "work-folder": "work", "out-folder": "out", "log-folder": "log"}
+# A new config.yaml starts as this; main() then fills in what it is given.
+TEMPLATE = """\
+# gpa-tools configuration for this machine.
+#
+# Made by install/configure.py (or /install-gpa-tools in Claude Code); edit freely.
+
+# --- folders ------------------------------------------------------------------
+pdf-folder: ~/gpa-tools-data/transcripts # transcript PDFs to read
+work-folder: ~/gpa-tools-data/work # .txt/.common.json; builders keep their files in <work-folder>/<builder>/
+out-folder: ~/gpa-tools-data/out # published <cat>_gpa.csv, for other applications
+log-folder: ~/gpa-tools-data/log # upload.log, llm_category.log, browser_view.log
+
+# --- View tab -------------------------------------------------------------------
+min-category-courses: 4 # hide students with fewer category courses
+
+# --- external tools -------------------------------------------------------------
+# Folders holding pdftotext when it is not on PATH
+# (the installer puts them in .tools/ when there is no admin access).
+# tool-folders: []
+
+# --- category builders --------------------------------------------------------
+# python -m category_builder --category STEM [--builder llm] [--publish]
+# Each reads the *.common.json in work-folder and writes <cat>_gpa.csv and
+# <cat>_courses.csv into <work-folder>/<builder>/. python -m out_builder copies
+# <cat>_gpa.csv to out-folder (the Upload tab does that after each run).
+active-category-builder: llm # the default in the Upload and View tabs
+category-builder:
+  llm: # a local LLM answers yes/no per course
+    model: qwen2.5:3b # any model in `ollama list`; the installer picks one for this machine
+    ollama-url: http://localhost:11434
+
+# --- category-definer: drafts a definition for the user to edit -------------------
+category-definer:
+  provider: ollama
+  model: qwen2.5:3b # a bigger model drafts better; it is one call per category
+  ollama-url: http://localhost:11434
+
+# --- category definitions (all builders) ------------------------------------
+# Shared by every category builder; drafted by category-definer, edit freely.
+# Changing a definition clears the llm builder's cached answers for it.
+# Delete an entry to have category-definer draft a new one.
+category-definitions: {}
+"""
 
 
 def scalar(value: str) -> str:
@@ -55,21 +100,37 @@ def set_top(text: str, key: str, rendered: str) -> str:
     return text.rstrip("\n") + f"\n{key}: {rendered}\n"
 
 
-def set_nested(text: str, parent: str, key: str, rendered: str) -> str:
-    """Set ``parent: {key: ...}`` (two-space indent), adding either if missing."""
-    block = re.search(rf"^{re.escape(parent)}:[^\n]*\n((?:[ \t]+[^\n]*\n|\n)*)", text, re.M)
-    if not block:
-        return text.rstrip("\n") + f"\n{parent}:\n  {key}: {rendered}\n"
-    body = block.group(1)
-    line = re.compile(rf"^(?P<indent>[ \t]+){re.escape(key)}:(?P<rest>.*)$", re.M)
-    match = line.search(body)
-    if match:
+def set_nested(text: str, parents: str | list[str], key: str, rendered: str) -> str:
+    """Set ``parents[0]: parents[1]: ... key:`` (two-space indents), adding what is missing."""
+    return _set_in(text, 0, [parents] if isinstance(parents, str) else list(parents), key, rendered)
+
+
+def _set_in(text: str, depth: int, parents: list[str], key: str, rendered: str) -> str:
+    pad = "  " * depth
+    if not parents:
+        line = re.compile(rf"^{pad}{re.escape(key)}:(?P<rest>.*)$", re.M)
+        match = line.search(text)
+        if not match:
+            return f"{pad}{key}: {rendered}\n" + text
         comment = re.search(r"\s+#.*$", match.group("rest"))
-        new_line = f"{match.group('indent')}{key}: {rendered}{comment.group(0) if comment else ''}"
-        body = body[:match.start()] + new_line + body[match.end():]
-    else:
-        body = f"  {key}: {rendered}\n" + body
+        new_line = f"{pad}{key}: {rendered}{comment.group(0) if comment else ''}"
+        return text[:match.start()] + new_line + text[match.end():]
+    block = re.search(rf"^{pad}{re.escape(parents[0])}:[^\n]*\n((?:{pad}[ \t]+[^\n]*\n|\n)*)",
+                      text, re.M)
+    if not block:
+        new = "".join(f"{'  ' * (depth + i)}{p}:\n" for i, p in enumerate(parents))
+        new += f"{'  ' * (depth + len(parents))}{key}: {rendered}\n"
+        kept = text.rstrip("\n")
+        # Any blank lines that ended the text stay after the new lines.
+        return (kept + "\n" if kept else "") + new + text[len(kept) + 1:]
+    body = _set_in(block.group(1), depth + 1, parents[1:], key, rendered)
     return text[:block.start(1)] + body + text[block.end(1):]
+
+
+def _get(cfg: dict, path) -> object:
+    for key in path:
+        cfg = cfg.get(key) if isinstance(cfg, dict) else None
+    return cfg
 
 
 def main(argv=None) -> int:
@@ -79,16 +140,17 @@ def main(argv=None) -> int:
                                    "<data>/transcripts, work, out and log")
     for key in FOLDERS:
         ap.add_argument(f"--{key}", help=f"set {key} (overrides --data)")
-    ap.add_argument("--model")
+    ap.add_argument("--model", help="the llm builder's model (and the definer's)")
+    ap.add_argument("--definer-model", help="category-definer's model, if different")
     ap.add_argument("--ollama-url")
     ap.add_argument("--tool-folder", action="append", default=[],
-                    help="add a folder holding pdftotext/tesseract (repeatable)")
+                    help="add a folder holding pdftotext (repeatable)")
     ap.add_argument("--no-mkdir", action="store_true", help="do not create the folders")
     args = ap.parse_args(argv)
 
     path: Path = args.config
     created = not path.exists()
-    text = (path if path.exists() else EXAMPLE).read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8") if path.exists() else TEMPLATE
 
     wanted = {}
     for key, sub in FOLDERS.items():
@@ -98,9 +160,14 @@ def main(argv=None) -> int:
     for key, value in wanted.items():
         text = set_top(text, key, scalar(value))
 
-    llm = {k: v for k, v in (("model", args.model), ("ollama-url", args.ollama_url)) if v}
-    for key, value in llm.items():
-        text = set_nested(text, "llm-category", key, scalar(value))
+    # (path in config.yaml, value): the llm builder, then the definer.
+    nested = [(("category-builder", "llm", k), v)
+              for k, v in (("model", args.model), ("ollama-url", args.ollama_url)) if v]
+    nested += [(("category-definer", k), v)
+               for k, v in (("model", args.definer_model or args.model),
+                            ("ollama-url", args.ollama_url)) if v]
+    for (*parents, key), value in nested:
+        text = set_nested(text, parents, key, scalar(value))
 
     if args.tool_folder:
         current = (yaml.safe_load(text) or {}).get("tool-folders") or []
@@ -113,7 +180,7 @@ def main(argv=None) -> int:
     # Re-read before replacing anything: valid YAML, and the values we meant.
     parsed = yaml.safe_load(text) or {}
     problems = [k for k, v in wanted.items() if parsed.get(k) != v]
-    problems += [k for k, v in llm.items() if (parsed.get("llm-category") or {}).get(k) != v]
+    problems += [".".join(path) for path, v in nested if _get(parsed, path) != v]
     if problems:
         print(f"refusing to write {path}: {', '.join(problems)} did not come out as intended")
         return 1
@@ -129,8 +196,9 @@ def main(argv=None) -> int:
     print(f"{'created' if created else 'updated'} {path}")
     for key in FOLDERS:
         print(f"  {key}: {parsed.get(key)}")
-    llm_now = parsed.get("llm-category") or {}
-    print(f"  model: {llm_now.get('model')}\n  ollama-url: {llm_now.get('ollama-url')}")
+    for path in (("category-builder", "llm", "model"), ("category-builder", "llm", "ollama-url"),
+                 ("category-definer", "model")):
+        print(f"  {'.'.join(path)}: {_get(parsed, path)}")
     if parsed.get("tool-folders"):
         print(f"  tool-folders: {parsed['tool-folders']}")
     return 0

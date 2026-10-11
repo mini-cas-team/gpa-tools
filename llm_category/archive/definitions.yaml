@@ -1,6 +1,6 @@
 # Category definitions taken out of config.yaml on 2026-10-09, kept for reuse.
 # To restore one, copy its entry back under category-definitions: in config.yaml.
-# With the text unchanged, its cached LLM answers (out/llm_category/cache_<name>.json)
+# With the text unchanged, its cached LLM answers (<work-folder>/llm/cache_<name>.json)
 # are still valid, so a run needs no new LLM calls.
 
 STEM: STEM stands for Science, Technology, Engineering, and Mathematics. This category includes

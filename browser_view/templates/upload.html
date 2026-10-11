@@ -33,8 +33,10 @@
 <section aria-labelledby="category-heading">
 <h2 id="category-heading">Categories</h2>
 <fieldset>
-  <legend>llm_category definitions</legend>
+  <legend>Category definitions</legend>
   <div class="category-bar">
+    <label for="builder-select">Builder</label>
+    <select id="builder-select" class="builder"></select>
     <label for="category-select">Category</label>
     <select id="category-select" hidden></select>
     <button type="button" id="category-update" class="secondary toggle" aria-pressed="false" hidden>Update</button>
@@ -47,8 +49,9 @@
   <form id="category-update-form" hidden>
     <label for="category-text">Definition of <span id="category-update-name"></span></label>
     <textarea id="category-text" name="definition" rows="9" required></textarea>
-    <p class="hint">Go saves the definition to config.yaml and ranks every student in the
-      work-folder on it with llm_category. That runs in the background.</p>
+    <p class="hint">Go saves the definition to config.yaml and runs the selected builder
+      on every student in the work-folder, in the background; the result is then
+      published to out-folder.</p>
     <div class="dialog-actions">
       <button type="submit" id="category-update-go">Go</button>
       <button type="button" id="category-update-cancel" class="secondary">Cancel</button>
@@ -161,6 +164,7 @@
 
 (() => {
   const $ = (id) => document.getElementById(id);
+  const builderSelect = $("builder-select");
   const select = $("category-select"), updateButton = $("category-update"), addButton = $("category-add");
   const definitionBox = $("category-definition");
   const updateForm = $("category-update-form"), text = $("category-text");
@@ -211,7 +215,7 @@
     // the active button stays usable (to close it) unless a draft or run is going.
     updateButton.disabled = busy || action === "add";
     addButton.disabled = busy || action === "update";
-    select.disabled = busy || action !== null;
+    select.disabled = builderSelect.disabled = busy || action !== null;
     progressBox.hidden = !busy;
     if (mode === "update") {
       $("category-update-name").textContent = select.value;
@@ -233,7 +237,7 @@
     // The first category in config.yaml unless one is asked for.
     if (selected && names.includes(selected)) select.value = selected;
     definitionBox.textContent = empty
-      ? "No categories yet. Use Add to have the LLM define one."
+      ? "No categories yet. Use Add to have category-definer draft one."
       : categories[select.value];
   }
 
@@ -242,6 +246,10 @@
     categories = data.categories || {};
     names = data.names || Object.keys(categories);
     $("category-path").textContent = data.path;
+    if (!builderSelect.options.length) {  // kept across reloads: the user's pick wins
+      builderSelect.replaceChildren(...(data.builders || []).map((b) => new Option(b, b)));
+      builderSelect.value = data.active_builder;
+    }
     // The Name box suggests the defined names (none when the section is empty).
     $("category-suggestions").replaceChildren(...names.map((name) => new Option(name)));
     render(selected);
@@ -270,8 +278,8 @@
       const draft = await call("/categories/draft", post({ name }));
       await call("/categories", post({ name: draft.name, definition: draft.definition }));
       await load(draft.name);
-      showStatus("ok", `${draft.name} defined by the LLM and saved to config.yaml. ` +
-        `Edit it if needed, then Go to rank students on it.`);
+      showStatus("ok", `${draft.name} drafted by category-definer and saved to config.yaml. ` +
+        `Edit it if needed, then Go to run the ${builderSelect.value} builder on it.`);
       setMode("update");
     } catch (err) {
       showStatus("error", `Error: ${err.message}`);
@@ -281,10 +289,10 @@
     }
   });
 
-  // ---- Update -> Go: save the edit, run llm_category ----------------------
+  // ---- Update -> Go: save the edit, run the selected builder ---------------
   updateForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const name = select.value, definition = text.value.trim();
+    const name = select.value, definition = text.value.trim(), builder = builderSelect.value;
     showStatus(null);
     try {
       if (definition !== categories[name]) {
@@ -293,8 +301,8 @@
       }
       setMode("busy");
       progress(`Starting ${name}…`);
-      const est = await call(`/runs/estimate?${new URLSearchParams({ category: name })}`);
-      showProgress(await call("/runs", post({ category: name })), est);
+      const est = await call(`/runs/estimate?${new URLSearchParams({ category: name, builder })}`);
+      showProgress(await call("/runs", post({ category: name, builder })), est);
       watch(est);
     } catch (err) {
       showStatus("error", `Error: ${err.message}`);
@@ -313,17 +321,18 @@
       }
       const counts = state.total ? `${state.done} of ${state.total} course(s) answered` : "starting";
       setMode("busy");
-      progress(`Ranking students on ${state.category}: ${counts} · ` +
+      progress(`${state.builder} builder on ${state.category}: ${counts} · ` +
         `${minutes(state.elapsed)} elapsed${eta}`, state.done, state.total);
       return;
     }
     if (state.status === "done") {
       const link = document.createElement("a");
-      link.href = `/view?${new URLSearchParams({ folder: state.folder, category: state.category })}`;
+      link.href = `/view?${new URLSearchParams({ builder: state.builder, category: state.category })}`;
       link.textContent = "Open in View";
-      showStatus("ok", [`${state.category} ranking written in ${minutes(state.elapsed)}. `, link]);
+      showStatus("ok", [`${state.category} built by ${state.builder} in ${minutes(state.elapsed)} ` +
+        `and published to ${state.published}. `, link]);
     } else if (state.status === "error") {
-      showStatus("error", `${state.category} run failed: ${state.error}`);
+      showStatus("error", `${state.builder} run of ${state.category} failed: ${state.error}`);
     }
     // Back to the read-only definition the run used.
     load(state.category).catch(() => {}).finally(() => setMode("view"));
@@ -340,16 +349,21 @@
   }
 
   (async () => {
+    // Ask about runs first: after a reload the panel opens on the category of
+    // the latest run (still going or finished), so the dropdown and the
+    // definition under it are rendered together from that one category.
+    const state = await call("/runs/status").catch(() => ({}));
     try {
-      await load();
+      await load(state.category);
     } catch (err) {
       showStatus("error", `Error: ${err.message}`);
     }
+    if (state.builder && [...builderSelect.options].some((o) => o.value === state.builder)) {
+      builderSelect.value = state.builder;
+    }
     setMode("view");
     // A run started earlier (or in another tab) keeps reporting here.
-    const state = await call("/runs/status").catch(() => ({}));
     if (state.status === "running") {
-      select.value = state.category;
       action = "update";  // a run is what Update starts
       showProgress(state);
       watch();
