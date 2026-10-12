@@ -7,21 +7,37 @@ import check
 import configure
 
 
-@pytest.mark.parametrize("ram, gpus, model", [
-    (11.6, [], "qwen2.5:3b"),
-    (64, [], "qwen2.5:3b"),
-    (6, [], "qwen2.5:1.5b"),
-    (None, [], "qwen2.5:3b"),
-    (16, [{"vendor": "nvidia", "name": "RTX", "vram_gb": 12}], "qwen2.5:7b"),
-    (16, [{"vendor": "nvidia", "name": "MX", "vram_gb": 2}], "qwen2.5:3b"),
-    (16, [{"vendor": "apple", "name": "M2", "vram_gb": 16}], "qwen2.5:7b"),
-    (8, [{"vendor": "apple", "name": "M1", "vram_gb": 8}], "qwen2.5:3b"),
-    (32, [{"vendor": "other", "name": "Intel UHD", "vram_gb": None}], "qwen2.5:3b"),
+NVIDIA = lambda gb: [{"vendor": "nvidia", "name": "GPU", "vram_gb": gb}]  # noqa: E731
+APPLE = lambda gb: [{"vendor": "apple", "name": "M", "vram_gb": gb}]  # noqa: E731
+
+
+@pytest.mark.parametrize("ram, gpus, build, definition", [
+    # no GPU: build stays 3b (fast on a CPU); definition grows with RAM, up to 14b
+    (11.6, [], "qwen2.5:3b", "qwen2.5:7b"),
+    (64, [], "qwen2.5:3b", "qwen2.5:14b"),
+    (6, [], "qwen2.5:1.5b", "qwen2.5:3b"),
+    (None, [], "qwen2.5:3b", "qwen2.5:3b"),
+    (32, [{"vendor": "other", "name": "Intel UHD", "vram_gb": None}], "qwen2.5:3b", "qwen2.5:14b"),
+    # GPU: build is the biggest that fits in it; definition uses GPU + RAM
+    (16, NVIDIA(8), "qwen2.5:7b", "qwen2.5:14b"),
+    (16, NVIDIA(12), "qwen2.5:14b", "qwen2.5:32b"),
+    (64, NVIDIA(24), "qwen2.5:14b", "qwen2.5:32b"),  # build capped at 14b
+    (128, NVIDIA(48), "qwen2.5:14b", "qwen2.5:72b"),
+    (16, NVIDIA(2), "qwen2.5:3b", "qwen2.5:14b"),  # too small for the GPU: CPU build
+    (16, APPLE(16), "qwen2.5:7b", "qwen2.5:14b"),
+    (8, APPLE(8), "qwen2.5:3b", "qwen2.5:3b"),
 ])
-def test_recommended_model_follows_ram_and_gpu(ram, gpus, model):
-    picked = check.recommend_model(ram, gpus)
-    assert picked["model"] == model
-    assert picked["reason"]
+def test_recommended_models_follow_ram_and_gpu(ram, gpus, build, definition):
+    picked = check.recommend_models(ram, gpus)
+    assert (picked["build"]["model"], picked["definition"]["model"]) == (build, definition)
+    assert picked["build"]["reason"] and picked["definition"]["reason"]
+    assert picked["download_gb"] == round(sum(check.MODEL_GB[m] for m in {build, definition}), 1)
+
+
+def test_a_gpu_build_model_fits_in_gpu_memory():
+    for gb in (4, 6, 8, 10, 12, 16, 24, 80):
+        model = check.recommend_models(32, NVIDIA(gb))["build"]["model"]
+        assert check.MODEL_GB[model] + check.OVERHEAD_GB <= gb
 
 
 @pytest.mark.parametrize("value", ["/home/ann/data", "C:/Users/Ann/data", "qwen2.5:3b"])
@@ -82,13 +98,16 @@ def test_set_nested_goes_two_levels_deep():
 def test_template_is_valid_yaml_with_every_key():
     cfg = yaml.safe_load(configure.TEMPLATE)
     assert set(configure.FOLDERS) <= set(cfg)
-    assert cfg["category-builder"]["llm"] == {"model": "qwen2.5:3b",
+    assert cfg["category-builder"]["llm"] == {"category-build-model": "qwen2.5:3b",
+                                              "category-definition-model": "qwen2.5:3b",
                                               "ollama-url": "http://localhost:11434"}
+    assert "model" not in cfg["category-definer"]
     assert cfg["category-builder"]["jev"] == {
         "model": "jev-1.13.0", "api-url": "https://api.typesafe.ai/v1/systemone",
         "api-key-env": "GPA_TOOLS_KEY", "threshold": 0.5, "batch-size": 20}
     assert cfg["active-category-builder"] == "llm"
-    assert cfg["category-definer"]["provider"] == "ollama"
+    assert cfg["category-definer"]["mode"] == "dev"
+    assert cfg["category-definer"]["retries"] == 1
     assert cfg["category-definitions"] == {}
     assert cfg["min-category-courses"] == 4
     assert "category" not in cfg
@@ -103,9 +122,11 @@ def test_configure_creates_config_from_the_template(tmp_path, capsys):
     for key, sub in configure.FOLDERS.items():
         assert cfg[key] == (data / sub).as_posix()
         assert (data / sub).is_dir()
-    assert cfg["category-builder"]["llm"] == {"model": "qwen2.5:7b", "ollama-url": "http://box:11434"}
-    assert cfg["category-definer"] == {"provider": "ollama", "model": "qwen2.5:14b",
-                                       "ollama-url": "http://box:11434"}
+    assert cfg["category-builder"]["llm"] == {"category-build-model": "qwen2.5:7b",
+                                              "category-definition-model": "qwen2.5:14b",
+                                              "ollama-url": "http://box:11434"}
+    assert cfg["category-definer"] == {"mode": "dev", "retries": 1, "browser-timeout": 120,
+                                       "browser": "auto"}
     assert config.read_text(encoding="utf-8").startswith("# gpa-tools configuration")
     assert "created" in capsys.readouterr().out
     assert not config.with_name("config.yaml.tmp").exists()
@@ -168,15 +189,25 @@ def test_tool_folders_go_first_on_path(monkeypatch, tmp_path):
 
 def test_check_reports_builder_definer_and_outdated_keys(monkeypatch):
     new = {"active-category-builder": "llm",
-           "category-builder": {"llm": {"model": "small", "ollama-url": "http://a:1"}},
-           "category-definer": {"model": "big"}}
+           "category-builder": {"llm": {"category-build-model": "small",
+                                        "category-definition-model": "big",
+                                        "ollama-url": "http://a:1"}},
+           "category-definer": {}}
     info = check.config_info(new, "present")
-    assert (info["model"], info["ollama-url"], info["active-category-builder"]) == \
-        ("small", "http://a:1", "llm")
-    assert info["definer"] == {"provider": "ollama", "model": "big", "ollama-url": "http://a:1"}
+    assert (info["category-build-model"], info["category-definition-model"], info["ollama-url"],
+            info["active-category-builder"]) == ("small", "big", "http://a:1", "llm")
+    assert info["definer"] == {"mode": "dev", "retries": 1, "browser": "auto",
+                               "ollama-url": "http://a:1"}
     assert info["outdated"] == {}
+    older = check.config_info({"category-definer": {"provider": "ollama"}}, "present")
+    assert "category-definer: provider" in older["outdated"]
     old = check.config_info({"llm-category": {"model": "m"}}, "present")
-    assert old["model"] is None and "llm-category" in old["outdated"]
+    assert old["category-build-model"] == "qwen2.5:3b" and "llm-category" in old["outdated"]
+    # before the two models: llm's model for both, category-definer's own model wins for drafts
+    two = check.config_info({"category-builder": {"llm": {"model": "small"}},
+                             "category-definer": {"model": "big"}}, "present")
+    assert (two["category-build-model"], two["category-definition-model"]) == ("small", "big")
+    assert {"category-builder: llm: model", "category-definer: model"} <= set(two["outdated"])
 
     monkeypatch.setattr(check, "ollama_binary", lambda: None)
     monkeypatch.setattr(check, "probe_ollama", lambda url: {"url": url})
@@ -191,7 +222,8 @@ def test_configure_points_out_an_outdated_llm_category_block(tmp_path, capsys):
     assert configure.main(["--config", str(config), "--model", "new", "--no-mkdir"]) == 0
     assert "'llm-category:' is from an older config.yaml" in capsys.readouterr().out
     cfg = yaml.safe_load(config.read_text(encoding="utf-8"))
-    assert cfg["category-builder"]["llm"]["model"] == "new" and cfg["llm-category"] == {"model": "old"}
+    assert cfg["category-builder"]["llm"]["category-build-model"] == "new"
+    assert cfg["llm-category"] == {"model": "old"}
 
 
 def test_configure_sets_jev_and_the_active_builder(tmp_path, capsys):
@@ -248,3 +280,27 @@ def test_jev_check_needs_the_key_and_asks_one_question(monkeypatch, capsys):
     assert jev_check.main(["ask", "jev-1.13.0"]) == 0
     out = capsys.readouterr().out
     assert '"score": 0.97' in out and "secret-value" not in out
+
+
+def test_configure_sets_the_definer_mode(tmp_path, capsys):
+    config = tmp_path / "config.yaml"
+    config.write_text("category-definer:\n  provider: ollama\n  model: m\n", encoding="utf-8")
+    assert configure.main(["--config", str(config), "--no-mkdir", "--definer-mode", "prod"]) == 0
+    cfg = yaml.safe_load(config.read_text(encoding="utf-8"))
+    assert cfg["category-definer"] == {"mode": "prod", "provider": "ollama", "model": "m"}
+    out = capsys.readouterr().out
+    assert "category-definer.mode: prod" in out and "no longer read" in out
+    with pytest.raises(SystemExit):
+        configure.main(["--config", str(config), "--definer-mode", "test"])
+
+
+def test_configure_points_out_the_older_model_keys(tmp_path, capsys):
+    config = tmp_path / "config.yaml"
+    config.write_text("category-builder:\n  llm:\n    model: a\ncategory-definer:\n  model: b\n",
+                      encoding="utf-8")
+    assert configure.main(["--config", str(config), "--model", "c", "--no-mkdir"]) == 0
+    out = capsys.readouterr().out
+    assert "category-builder.llm.model is from an older config.yaml" in out
+    assert "category-definer.model is from an older config.yaml" in out
+    llm = yaml.safe_load(config.read_text(encoding="utf-8"))["category-builder"]["llm"]
+    assert (llm["category-build-model"], llm["category-definition-model"]) == ("c", "c")

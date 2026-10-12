@@ -1,0 +1,49 @@
+2026-10-11 22:58:12 LAW: drafted by ollama (2 failure(s))
+  chatgpt try 1 (0.0s) failed: OSError: down
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok
+2026-10-11 22:58:12 LAW: drafted by ollama (1 failure(s))
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok
+2026-10-11 23:10:13 LAW: drafted by ollama (2 failure(s))
+  chatgpt try 1 (0.0s) failed: OSError: down
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok
+2026-10-11 23:10:13 LAW: drafted by ollama (1 failure(s))
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok
+2026-10-11 23:10:55 LAW: drafted by ollama (2 failure(s))
+  chatgpt try 1 (0.0s) failed: OSError: down
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok
+2026-10-11 23:10:55 LAW: drafted by ollama (1 failure(s))
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok
+2026-10-11 23:11:34 LAW: drafted by ollama (2 failure(s))
+  chatgpt try 1 (0.0s) failed: OSError: down
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok
+2026-10-11 23:11:34 LAW: drafted by ollama (1 failure(s))
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok
+2026-10-11 23:18:19 LAW: drafted by ollama (2 failure(s))
+  chatgpt try 1 (0.0s) failed: OSError: down
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok
+2026-10-11 23:18:19 LAW: drafted by ollama (1 failure(s))
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok
+2026-10-11 23:19:08 LAW: drafted by ollama (2 failure(s))
+  chatgpt try 1 (0.0s) failed: OSError: down
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok
+2026-10-11 23:19:08 LAW: drafted by ollama (1 failure(s))
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok
+2026-10-11 23:24:42 LAW: drafted by ollama (2 failure(s))
+  chatgpt try 1 (0.0s) failed: OSError: down
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok
+2026-10-11 23:24:42 LAW: drafted by ollama (1 failure(s))
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok

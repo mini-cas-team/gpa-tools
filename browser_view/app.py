@@ -243,9 +243,14 @@ def create_app(config_path: Path | None = None) -> Flask:
         """
         try:
             data = Definitions(config_path).data
+            cfg = _load_config(config_path)
+            try:
+                steps = definer.step_names(definer.load_config(cfg))
+            except ValueError:
+                steps = []  # a bad mode: the draft request reports it
             return jsonify(categories=data, names=list(data), path=str(config_path),
                            builders=category_builder.names(),
-                           active_builder=category_builder.active(_load_config(config_path)))
+                           active_builder=category_builder.active(cfg), definer=steps)
         except (OSError, yaml.YAMLError) as exc:
             return jsonify(error=f"could not read {config_path}: {exc}"), 500
 
@@ -260,13 +265,17 @@ def create_app(config_path: Path | None = None) -> Flask:
             return jsonify(error=f"{name} is already defined"), 409
         cfg = _load_config(config_path)
         try:
-            definer_cfg = definer.load_config(cfg)
-            definition = definer.client(definer_cfg).define(name)
+            definer.load_config(cfg)
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
-        except (OSError, KeyError) as exc:  # URLError is an OSError
-            return jsonify(error=f"{definer.describe(definer_cfg)}: {exc}"), 502
-        return jsonify(name=name, definition=definition)
+        try:
+            draft = definer.draft(cfg, name)
+        except definer.DraftFailed as exc:
+            # Every try failed; the page lists them (they are in category_definer.log too).
+            return jsonify(error=f"category-definer could not draft {name}: every step failed",
+                           attempts=[a.to_dict() for a in exc.attempts]), 502
+        return jsonify(name=name, definition=draft.definition, source=draft.source,
+                       attempts=[a.to_dict() for a in draft.attempts])
 
     @app.post("/categories")
     def save_category():

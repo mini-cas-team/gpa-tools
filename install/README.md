@@ -17,12 +17,12 @@ location, whether to add the TypeSafe jev builder), and runs the scripts below.
 
 | script | does | needs |
 |---|---|---|
-| `check.py` | Reports OS, RAM, GPU, disk, Python/venv, pdftotext, Ollama (binary, server, models), config.yaml, and the recommended model. Changes nothing. | any Python 3.8+ |
+| `check.py` | Reports OS, RAM, GPU, disk, Python/venv, pdftotext, Google Chrome and Edge, Ollama (binary, server, models), config.yaml (including the definer's mode), and the recommended model. Changes nothing. | any Python 3.8+ |
 | `get_tools.py` | Installs poppler (pdftotext) into `.tools/` with micromamba. | any Python 3.8+ |
 | `get_ollama.py` | Installs Ollama for this user and starts it. Does nothing if a server already answers. | the venv's Python |
 | `ollama_check.py` | `probe URL`, `pull URL MODEL`, `ask URL MODEL` (one real yes/no question). | any Python 3.8+ |
 | `jev_check.py` | `probe` (is the TypeSafe key accepted; free), `ask [MODEL]` (one real question). Reads the key from `$GPA_TOOLS_KEY` (`--key-env` for another name) and never prints it. | any Python 3.8+ |
-| `configure.py` | Creates config.yaml from its built-in template, or updates it: folders, tool-folders, and the model and ollama-url of `category-builder: llm:` and `category-definer:` (`--model` sets both; `--definer-model` gives the definer its own), `category-builder: jev:` (`--jev-model`, `--jev-key-env`) and `--active-builder llm\|jev`. | the venv's Python |
+| `configure.py` | Creates config.yaml from its built-in template, or updates it: folders, tool-folders, the two Ollama models of `category-builder: llm:` (`--model` sets `category-build-model` and `category-definition-model`; `--definer-model` gives the definition model its own) and its `--ollama-url`, `category-builder: jev:` (`--jev-model`, `--jev-key-env`), `--active-builder llm\|jev`, and `--definer-mode dev\|prod` (prod on a machine without a desktop). | the venv's Python |
 
 ## By hand
 
@@ -57,26 +57,38 @@ $PY -m browser_view                                 # http://127.0.0.1:5001
 
 ## Model choice
 
-`check.py` picks a qwen2.5 size from the hardware:
+`check.py` picks two qwen2.5 sizes from the hardware (`recommended_models`):
 
-| machine | model |
-|---|---|
-| NVIDIA or AMD GPU with 8 GB+ memory, or Apple Silicon with 16 GB+ | `qwen2.5:7b` |
-| 8 GB+ RAM otherwise (a CPU-only machine stays on 3b: 7b is about 2.5 times slower) | `qwen2.5:3b` |
-| under 8 GB RAM | `qwen2.5:1.5b` |
+- **build** (`category-build-model`) answers ~400 questions a run, so it is the
+  fast one: the biggest that fits entirely in GPU memory (up to 14b), or 3b
+  without a GPU (1.5b under 8 GB RAM).
+- **definition** (`category-definition-model`) is asked once per category, so it
+  is as large as fits: GPU memory plus 70% of RAM, up to 32b (72b on a 48 GB+
+  GPU), or up to 14b without a GPU.
 
-Changing the model later discards the llm builder's cached answers, so the next
-run asks every course again.
+| machine | build | definition |
+|---|---|---|
+| no GPU, 12 GB RAM | 3b | 7b |
+| no GPU, 32 GB+ RAM | 3b | 14b |
+| GPU 8 GB, 16 GB RAM | 7b | 14b |
+| GPU 12–24 GB | 14b | 32b |
 
-The definer drafts one definition per category, so it can afford a bigger
-model than the builder, which answers hundreds of questions:
-`configure.py --model qwen2.5:3b --definer-model qwen2.5:7b` (pull both).
+Save them with `configure.py --model <build> --definer-model <definition>`
+(pull both). Changing the build model later discards the llm builder's cached
+answers, so the next run asks every course again; the definition model clears
+nothing.
+Ollama is the definer's last step. Before it, `mode: dev` tries ChatGPT and
+Gemini in visible browser windows, and `mode: prod` tries Gemini headless, through
+their free web chats (Playwright with the installed Chrome or Edge; no account,
+no key). Check a step with `$PY -m category_definition_builder STEM --only gemini`;
+on a machine without a desktop, use `configure.py --definer-mode prod`.
 
 ## Where things go
 
 | what | where |
 |---|---|
 | venv | `.venv312/` in the project |
+| definer's Chrome profiles | `<work-folder>/browser-profiles/` (`profile-folder:` under `category-definer:` to move them) |
 | poppler | `.tools/` in the project (git-ignored), listed under `tool-folders:` in config.yaml |
 | Ollama | Linux: `~/.local/ollama`, a systemd user service. macOS: `~/Applications/Ollama.app`. Windows: `%LOCALAPPDATA%\Programs\Ollama` |
 | models | `~/.ollama/models` |

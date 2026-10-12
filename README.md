@@ -2,11 +2,16 @@
 
 Compare students by average **category GPA** (STEM, MEDICAL, ...) read out of
 student transcript PDFs. A category builder decides which courses belong to a
-category; today that is `llm`, a local LLM. Everything runs on this machine.
+category: `llm`, a local LLM (Ollama), or `jev`, TypeSafe's hosted model. A
+category's definition is drafted by `category-definer`, through ChatGPT's or
+Gemini's free web chat or the local LLM, and then edited by you.
 
 ```
 PDF ──► upload ──► work/<name>.common.json ──► category builder ──► work/<builder>/<cat>_gpa.csv ──► out_builder ──► out/<cat>_gpa.csv
         pdftotext   (gpa_4 per course)         llm: Ollama yes/no     work/<builder>/<cat>_courses.csv   (copy)          (public output)
+                                               jev: TypeSafe 0-1 score
+                                                    ▲
+                        category-definitions ───────┘  (drafted by category-definer: chatgpt / gemini / ollama)
 
 browser_view: the Upload tab drives all three; the View tab reads work/<builder>/
 ```
@@ -25,10 +30,11 @@ claude                     # then type:  /install-gpa-tools
 
 The `/install-gpa-tools` skill does the rest in your own user account, with no
 admin rights, on Linux, macOS or Windows:
-- the venv and packages
+- the venv and packages (Playwright among them; it drives the installed Chrome or Edge)
 - pdftotext (into `.tools/`, if it's missing)
-- Ollama and a qwen2.5 model sized to the machine's RAM and GPU
-- `config.yaml`: folders, model and Ollama URL, set by `install/configure.py`
+- Ollama and two qwen2.5 models sized to the machine: a fast one for building (fits in the GPU, if there is one) and the largest that fits for drafting definitions
+- `config.yaml`: folders, the two models and the Ollama URL, the definer's mode and,
+  optionally, the jev builder, set by `install/configure.py`
 
 It checks what is already installed first and asks before downloading. See
 [install/README.md](install/README.md) for the scripts it uses, which also
@@ -40,7 +46,11 @@ Or by hand, on Linux with admin rights:
 python3.12 -m venv .venv312
 .venv312/bin/pip install -r requirements.txt
 sudo apt install poppler-utils                  # pdftotext
-.venv312/bin/python install/configure.py --data ~/gpa-tools-data
+curl -fsSL https://ollama.com/install.sh | sh   # Ollama
+ollama pull qwen2.5:3b                          # build model
+ollama pull qwen2.5:7b                          # definition model
+.venv312/bin/python install/configure.py --data ~/gpa-tools-data \
+    --model qwen2.5:3b --definer-model qwen2.5:7b
 ```
 
 ## Usage
@@ -52,14 +62,15 @@ sudo apt install poppler-utils                  # pdftotext
 pdf-folder: /home/personal/Templates/transcripts   # PDFs to convert
 work-folder: /home/personal/Templates/work         # .txt, .common.json, uploaded PDFs; <builder>/ folders
 out-folder: /home/personal/Templates/out           # published <cat>_gpa.csv, for other applications
-log-folder: /home/personal/Templates/log           # upload.log, llm_category.log, jev_category.log, browser_view.log
+log-folder: /home/personal/Templates/log           # upload, llm_category, jev_category, category_definer, browser_view .log
 min-category-courses: 4      # View tab: hide students with fewer category courses
 
 active-category-builder: jev # the default in the Upload and View tabs and the CLI
 category-builder:            # one section per builder
   llm:
-    model: qwen2.5:3b        # any model in `ollama list`
-    ollama-url: http://localhost:11434
+    category-build-model: qwen2.5:3b       # the llm builder's yes/no answers: the fast one
+    category-definition-model: qwen2.5:7b  # category-definer's ollama step: as large as fits
+    ollama-url: http://localhost:11434     # both models: any in `ollama list` there
   jev:
     model: jev-1.13.0        # a version pins it; `jev-latest` follows new releases
     api-url: https://api.typesafe.ai/v1/systemone
@@ -67,10 +78,11 @@ category-builder:            # one section per builder
     threshold: 0.5           # in the category when Jev's score is above this
     batch-size: 20           # courses per request
 
-category-definer:            # drafts definitions; keys left out fall back to category-builder.llm
-  provider: ollama
-  model: qwen2.5:3b          # a bigger model drafts better; it is one call per category
-  ollama-url: http://localhost:11434
+category-definer:            # drafts definitions: the mode's steps in turn until one gives one
+  mode: dev                  # dev: chatgpt -> gemini -> ollama (browser windows); prod: gemini headless -> ollama
+  retries: 1                 # extra tries for chatgpt and gemini
+  browser-timeout: 120       # seconds to wait for a site's reply
+  browser: auto              # Chrome, else Edge, else Playwright's Chromium; or chrome / msedge / chromium
 
 category-definitions:        # shared by every builder; drafted by category-definer, edit freely
   STEM: STEM stands for Science, Technology, Engineering, and Mathematics. ...
@@ -117,7 +129,37 @@ reading the CSV wants.
 **Definitions** are shared by every builder and kept in
 `category-definitions`. When a category has none, `category-definer` drafts
 one as a starting point and saves it; edit it before (re)building. Drafting
-is separate from building, so it can use another model or provider.
+is separate from building, so it uses its own sources: the web chats below,
+then the local `category-definition-model`.
+
+The definer's `mode` picks its steps. It moves on whenever a step fails or
+its reply has no usable definition, and ChatGPT and Gemini get one retry each
+(`retries`):
+
+| mode | steps | needs |
+|---|---|---|
+| `dev` (default) | ChatGPT → Gemini → Ollama, each site in a visible browser window | a desktop session |
+| `prod` | Gemini headless (no window) → Ollama | nothing on screen; fine for a server |
+
+Ollama here is `category-definition-model`. Neither mode needs an API key.
+
+ChatGPT is only in `dev` because it stops a headless browser at its bot check.
+The two sites are used through their free web chats, anonymously, with no
+account and no API key: `category_definition_builder` has Playwright drive the
+installed Chrome (else Edge, else Playwright's own Chromium, `browser: auto`),
+type the question into chatgpt.com or gemini.google.com and read the reply.
+No browser extension is needed. Each try is logged to
+`<log-folder>/category_definer.log` and shown in the Upload tab, failures
+included. To check one step by hand (nothing is saved):
+
+```bash
+.venv312/bin/python -m category_definition_builder STEM --only chatgpt
+.venv312/bin/python -m category_definition_builder STEM --mode prod --only gemini
+```
+
+The sites' page layouts are not an API: when one changes, that step fails
+and the next takes over, until the selectors in
+`category_definition_builder/browser_legs.py` are updated.
 
 **Adding a builder** (e.g. `mine`): write a module with `load_config(config_path)`
 (returning at least `folder`), `run(cfg, category, progress=None)` and
@@ -126,21 +168,33 @@ optionally `estimate(cfg, category, definition)`; have it write its CSVs with
 `category_builder/__init__.py` and a `category-builder: mine:` section to
 config.yaml. The Upload and View tabs list it from then on.
 
-#### The llm builder
+#### The llm builder and its two models
 
-Needs [Ollama](https://ollama.com) running locally with the model pulled
-(`ollama pull qwen2.5:3b`). For every distinct course (code + title) across
+Needs [Ollama](https://ollama.com) running locally with both models of
+`category-builder: llm:` pulled:
+
+| key | used for | picked to be |
+|---|---|---|
+| `category-build-model` | this builder's yes/no answer per course, ~400 a run | **fast**: the biggest that fits in GPU memory (up to 14b), 3b without a GPU |
+| `category-definition-model` | category-definer's last step, one call per category | **as large as fits**: GPU memory plus 70% of RAM, up to 14b without a GPU |
+
+The installer picks both from the hardware (`install/check.py`); on a 12 GB
+laptop without a GPU that is 3b and 7b. Change either with
+`install/configure.py --model <build> --definer-model <definition>`.
+
+For every distinct course (code + title) across
 all students it asks the LLM a yes/no question: "using only that definition,
 is this course in the category?" Answers are constrained to `yes`/`no` by a
 JSON schema, at temperature 0, so the same question gets the same answer.
 
 **The cache, `<work-folder>/llm/cache_<cat>.json`, is what makes reruns
-fast.** It is keyed by course and stamped with a hash of the model and the
-definition:
+fast.** It is keyed by course and stamped with a hash of
+`category-build-model` and the definition (the definition model is not part
+of it):
 
-- Same definition and model: every saved answer is reused, no LLM calls, and
+- Same definition and category-build-model: every saved answer is reused, no LLM calls, and
   the two CSVs are rebuilt in seconds from the current `.common.json` files.
-- Edited definition or different model: the saved answers are discarded and
+- Edited definition or different category-build-model: the saved answers are discarded and
   every distinct course is asked again. That is roughly 400 courses for 64
   students, at about 13–16 s each on a CPU-only laptop, so 1.5–2 hours.
 - New students: only courses not seen before are asked.
@@ -213,8 +267,11 @@ publishes only with `--publish` or this command.
     to out-folder. When it finishes, the panel shows the definition the run
     used and an *Open in View* link.
   - **Add** shows a **Name** box with **Go** and **Cancel**. Go asks
-    category-definer for a draft (this takes 1–4 minutes), saves it to
-    `config.yaml`, and switches to Update so you can edit it before building.
+    category-definer for a draft (about a minute through ChatGPT or Gemini,
+    longer when it falls back; the progress line names the steps), saves it
+    to `config.yaml`, and switches to Update so you can edit it before
+    building. The result names who drafted it, and failed tries are listed
+    under it.
   - While Update or Add is active, the other button and the dropdown are
     disabled. One run at a time is allowed.
 
@@ -238,11 +295,21 @@ upload/           PDF -> .txt + .common.json (python -m upload)
 category_builder/ builder registry and CLI (python -m category_builder)
   common.py       reading .common.json, writing <cat>_gpa.csv and <cat>_courses.csv
   definitions.py  category-definitions in config.yaml
-  definer.py      category-definer: drafts a definition
+  definer.py      category-definer: modes, steps, retries and log
+category_definition_builder/  drafts a definition via ChatGPT/Gemini in a browser
+                  (python -m category_definition_builder STEM)
+  browser_legs.py the two sites, browser choice, headless or not (from llm_compare)
+  pipeline.py     one browser try per process, with a hard deadline
+  client.py       prompt and DEFINITION: ... END parsing
+  chain.py        try steps in turn, recording each attempt
 llm_category/     the llm builder (python -m llm_category)
   builder.py      load_config / run / estimate
   llm.py          the Ollama prompts
   store.py        answer cache
+jev_category/     the jev builder (python -m jev_category)
+  builder.py      load_config / run / estimate
+  client.py       TypeSafe API client
+  store.py        score cache
 out_builder/      publish <cat>_gpa.csv to out-folder (python -m out_builder)
 browser_view/     Flask UI: Upload and View tabs (python -m browser_view)
 install/          per-user installer scripts (used by /install-gpa-tools)
@@ -255,7 +322,9 @@ tests/
 .venv312/bin/python -m pytest tests/ -q
 ```
 
-The tests need neither Ollama nor pdftotext: both are replaced by fakes. They
-cover transcript conversion and GPA, the builder registry and CSV output,
-definitions and the definer, the LLM client and answer cache, publishing,
-every browser_view route, and the installer's config editing and model choice.
+The tests need neither Ollama, pdftotext, a browser nor TypeSafe: all are
+replaced by fakes. They cover transcript conversion and GPA, the builder
+registry and CSV output, both builders and their caches, definitions, the
+definer's modes and attempt log, reply parsing, which model does which job,
+publishing, every browser_view route, and the installer's config editing and
+model choice.

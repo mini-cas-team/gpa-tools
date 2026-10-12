@@ -78,3 +78,29 @@ class FakeLLM:
 @pytest.fixture
 def fake_llm():
     return FakeLLM()
+
+
+class NoBrowser:
+    """Stands in for the chatgpt and gemini steps: tests never open Chrome."""
+
+    def __init__(self, cfg=None):
+        pass
+
+    def define(self, category):
+        raise RuntimeError("no browser in tests")
+
+
+class NoOllama(NoBrowser):
+    def define(self, category):
+        raise OSError("no ollama in tests")
+
+
+@pytest.fixture(autouse=True)
+def no_browser(monkeypatch):
+    """The definer's steps fail at once unless a test fakes them: no test
+    opens a browser or asks the real Ollama (fake_llm and friends replace it)."""
+    from category_builder import definer
+
+    for step in definer.BROWSER_STEPS:
+        monkeypatch.setitem(definer.PROVIDERS, step, NoBrowser)
+    monkeypatch.setitem(definer.PROVIDERS, "ollama", NoOllama)

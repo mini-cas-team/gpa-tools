@@ -19,8 +19,9 @@ min-category-courses: 4 # View tab: hide students with fewer category courses
 active-category-builder: jev # the default in the Upload and View tabs
 category-builder:
   llm: # a local LLM answers yes/no per course; logs to <log-folder>/llm_category.log
-    model: qwen2.5:3b # any model in `ollama list`
-    ollama-url: http://localhost:11434
+    category-build-model: qwen2.5:3b # yes/no per course; changing it clears the cached answers
+    category-definition-model: qwen2.5:7b # category-definer's ollama step; one call per category, so a bigger model is affordable
+    ollama-url: http://localhost:11434 # any model in `ollama list` there
   jev: # TypeSafe's Jev scores each course 0-1; logs to <log-folder>/jev_category.log
     model: jev-1.13.0 # a version pins it; `jev-latest` follows new releases
     api-url: https://api.typesafe.ai/v1/systemone
@@ -29,23 +30,23 @@ category-builder:
     batch-size: 20 # courses per request
 
 # --- category-definer: drafts a definition for the user to edit -------------------
+# Tries the mode's steps in turn until one gives a definition. chatgpt and gemini
+# are their free web chats, used anonymously (no account, no key) in the installed
+# Chrome or Edge; ollama is category-builder: llm: category-definition-model. Every try is logged to
+# <log-folder>/category_definer.log and shown in the Upload tab.
 category-definer:
-  provider: ollama
-  model: qwen2.5:3b # a bigger model drafts better; it is one call per category
-  ollama-url: http://localhost:11434
+  mode: dev # dev: chatgpt -> gemini -> ollama, in visible browser windows (needs a desktop)
+  #           prod: gemini (headless, no window) -> ollama
+  retries: 1 # extra tries for chatgpt and gemini (ollama is tried once)
+  browser-timeout: 120 # seconds to wait for a site's reply
+  browser: auto # auto (Chrome, else Edge, else Playwright's Chromium), chrome, msedge, chromium
+  # profile-folder: ~/gpa-tools-data/work/browser-profiles # default <work-folder>/browser-profiles
 
 # --- category definitions (all builders) ------------------------------------
 # Shared by every category builder; drafted by category-definer, edit freely.
 # Changing a definition clears the llm builder's cached answers for it.
 # Delete an entry to have category-definer draft a new one.
 category-definitions:
-  LAW: The 'LAW' category encompasses courses focused on legal systems, jurisprudence, and
-    the application of law to solve disputes and regulate behavior. Included subjects include
-    constitutional law, criminal justice, international law, and torts. Borderline subjects
-    such as political science (which covers governance and public policy) and economics (which
-    examines market behaviors within a legal framework), are not included in this category
-    as they overlap with broader social sciences or economic studies rather than focusing
-    solely on the principles and practices of law itself.
   MEDICAL: The MEDICAL category includes courses focused on health sciences, including anatomy,
     physiology, microbiology, pharmacology, and medical genetics. It also encompasses allied
     health fields such as nursing, physical therapy, and occupational therapy. Subjects like

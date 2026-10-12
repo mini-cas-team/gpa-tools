@@ -3,11 +3,16 @@
     .venv312/bin/python install/configure.py --data ~/gpa-tools-data \\
         --model qwen2.5:3b --ollama-url http://localhost:11434
 
---model and --ollama-url set both the llm category builder and the
-category-definer; --definer-model then gives the definer its own model.
+--model sets both Ollama models in category-builder: llm:,
+category-build-model (the llm builder's answers) and category-definition-model
+(category-definer's ollama step); --definer-model then gives the definer its
+own. --ollama-url is where both run.
 --jev-model and --jev-key-env set the jev builder (TypeSafe); the key itself
 never goes in config.yaml, only the name of the variable holding it.
 --active-builder picks the builder the Upload and View tabs start with.
+--definer-mode picks category-definer's steps: dev (chatgpt -> gemini ->
+ollama in visible browser windows; needs a desktop) or prod (gemini headless
+-> ollama).
 
 Without config.yaml, it is created from TEMPLATE below. Only the keys
 given on the command line change; every other line, comments included, is
@@ -58,8 +63,9 @@ min-category-courses: 4 # hide students with fewer category courses
 active-category-builder: llm # the default in the Upload and View tabs
 category-builder:
   llm: # a local LLM answers yes/no per course
-    model: qwen2.5:3b # any model in `ollama list`; the installer picks one for this machine
-    ollama-url: http://localhost:11434
+    category-build-model: qwen2.5:3b # yes/no per course; the installer picks one for this machine
+    category-definition-model: qwen2.5:3b # category-definer's ollama step; one call per category, so a bigger model is affordable
+    ollama-url: http://localhost:11434 # any model in `ollama list` there
   jev: # TypeSafe's Jev scores each course 0-1 (hosted; needs an API key)
     model: jev-1.13.0 # a version pins it; `jev-latest` follows new releases
     api-url: https://api.typesafe.ai/v1/systemone
@@ -68,10 +74,17 @@ category-builder:
     batch-size: 20 # courses per request
 
 # --- category-definer: drafts a definition for the user to edit -------------------
+# Tries the mode's steps in turn until one gives a definition. chatgpt and gemini
+# are their free web chats, used anonymously (no account, no key) in the installed
+# Chrome or Edge; ollama is category-builder: llm: category-definition-model. Every try is logged to
+# <log-folder>/category_definer.log and shown in the Upload tab.
 category-definer:
-  provider: ollama
-  model: qwen2.5:3b # a bigger model drafts better; it is one call per category
-  ollama-url: http://localhost:11434
+  mode: dev # dev: chatgpt -> gemini -> ollama, in visible browser windows (needs a desktop)
+  #           prod: gemini (headless, no window) -> ollama
+  retries: 1 # extra tries for chatgpt and gemini (ollama is tried once)
+  browser-timeout: 120 # seconds to wait for a site's reply
+  browser: auto # auto (Chrome, else Edge, else Playwright's Chromium), chrome, msedge, chromium
+  # profile-folder: ~/gpa-tools-data/work/browser-profiles # default <work-folder>/browser-profiles
 
 # --- category definitions (all builders) ------------------------------------
 # Shared by every category builder; drafted by category-definer, edit freely.
@@ -136,6 +149,14 @@ def _set_in(text: str, depth: int, parents: list[str], key: str, rendered: str) 
     return text[:block.start(1)] + body + text[block.end(1):]
 
 
+# (section, key, what replaces it): read only while the new key is missing
+OLD_MODEL_KEYS = [
+    (("category-builder", "llm"), "model", "category-build-model / category-definition-model"),
+    (("category-definer",), "model", "category-builder.llm.category-definition-model"),
+    (("category-definer",), "ollama-url", "category-builder.llm.ollama-url"),
+]
+
+
 def _get(cfg: dict, path) -> object:
     for key in path:
         cfg = cfg.get(key) if isinstance(cfg, dict) else None
@@ -149,13 +170,16 @@ def main(argv=None) -> int:
                                    "<data>/transcripts, work, out and log")
     for key in FOLDERS:
         ap.add_argument(f"--{key}", help=f"set {key} (overrides --data)")
-    ap.add_argument("--model", help="the llm builder's model (and the definer's)")
-    ap.add_argument("--definer-model", help="category-definer's model, if different")
+    ap.add_argument("--model", help="category-build-model and category-definition-model")
+    ap.add_argument("--definer-model", help="category-definition-model, if different")
     ap.add_argument("--ollama-url")
     ap.add_argument("--jev-model", help="the jev builder's TypeSafe model, e.g. jev-1.13.0")
     ap.add_argument("--jev-key-env", help="name of the env var holding the TypeSafe API key")
     ap.add_argument("--active-builder", choices=("llm", "jev"),
                     help="the builder the Upload and View tabs start with")
+    ap.add_argument("--definer-mode", choices=("dev", "prod"),
+                    help="category-definer: dev = chatgpt -> gemini -> ollama in browser "
+                         "windows, prod = gemini headless -> ollama")
     ap.add_argument("--tool-folder", action="append", default=[],
                     help="add a folder holding pdftotext (repeatable)")
     ap.add_argument("--no-mkdir", action="store_true", help="do not create the folders")
@@ -175,14 +199,15 @@ def main(argv=None) -> int:
     for key, value in wanted.items():
         text = set_top(text, key, scalar(value))
 
-    # (path in config.yaml, value): the llm builder, then the definer.
+    # (path in config.yaml, value): the llm builder's two models, then jev.
     nested = [(("category-builder", "llm", k), v)
-              for k, v in (("model", args.model), ("ollama-url", args.ollama_url)) if v]
-    nested += [(("category-definer", k), v)
-               for k, v in (("model", args.definer_model or args.model),
-                            ("ollama-url", args.ollama_url)) if v]
+              for k, v in (("category-build-model", args.model),
+                           ("category-definition-model", args.definer_model or args.model),
+                           ("ollama-url", args.ollama_url)) if v]
     nested += [(("category-builder", "jev", k), v)
                for k, v in (("model", args.jev_model), ("api-key-env", args.jev_key_env)) if v]
+    if args.definer_mode:
+        nested.append((("category-definer", "mode"), args.definer_mode))
     for (*parents, key), value in nested:
         text = set_nested(text, parents, key, scalar(value))
 
@@ -214,12 +239,21 @@ def main(argv=None) -> int:
     for key in FOLDERS:
         print(f"  {key}: {parsed.get(key)}")
     print(f"  active-category-builder: {parsed.get('active-category-builder')}")
-    for path in (("category-builder", "llm", "model"), ("category-builder", "llm", "ollama-url"),
-                 ("category-definer", "model"), ("category-builder", "jev", "model"),
+    for path in (("category-builder", "llm", "category-build-model"),
+                 ("category-builder", "llm", "category-definition-model"),
+                 ("category-builder", "llm", "ollama-url"),
+                 ("category-definer", "mode"), ("category-builder", "jev", "model"),
                  ("category-builder", "jev", "api-key-env")):
         print(f"  {'.'.join(path)}: {_get(parsed, path)}")
     if parsed.get("tool-folders"):
         print(f"  tool-folders: {parsed['tool-folders']}")
+    if "provider" in (parsed.get("category-definer") or {}):
+        print("  note: category-definer's 'provider:' is from an older config.yaml and is no longer "
+              "read; 'mode:' picks the steps now. Delete it by hand.")
+    for where, key, instead in OLD_MODEL_KEYS:
+        if key in (_get(parsed, where) or {}):
+            print(f"  note: {'.'.join(where)}.{key} is from an older config.yaml; "
+                  f"{instead} replaces it. Delete it by hand.")
     if "llm-category" in parsed:
         print("  note: 'llm-category:' is from an older config.yaml and is no longer read; "
               "its settings now live under category-builder: llm:. Delete it by hand.")

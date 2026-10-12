@@ -31,8 +31,15 @@ JEV_DEFAULTS = {"model": "jev-1.13.0", "api-url": "https://api.typesafe.ai/v1/sy
                 "api-key-env": "GPA_TOOLS_KEY"}
 PYTHON_WANTED = (3, 12)
 
-# Download sizes, for the free-disk check.
-MODEL_GB = {"qwen2.5:1.5b": 1.0, "qwen2.5:3b": 1.9, "qwen2.5:7b": 4.7}
+# qwen2.5 sizes, smallest first, with Ollama's download size in GB (q4). A
+# model needs about its download size in memory plus OVERHEAD_GB for context.
+QWEN = [("qwen2.5:1.5b", 1.0), ("qwen2.5:3b", 1.9), ("qwen2.5:7b", 4.7),
+        ("qwen2.5:14b", 9.0), ("qwen2.5:32b", 20.0), ("qwen2.5:72b", 47.0)]
+MODEL_GB = dict(QWEN)
+OVERHEAD_GB = 1.5
+# The build model answers ~400 questions a run, so it stays fast: no bigger
+# than this even on a large GPU.
+BUILD_CAP = "qwen2.5:14b"
 
 
 def run(cmd, timeout=10) -> str:
@@ -136,22 +143,69 @@ def gpus() -> list[dict]:
     return found
 
 
-def recommend_model(ram: float | None, gpu_list: list[dict]) -> dict:
-    """qwen2.5 sized to the machine. A CPU-only machine gets 3b even with lots
-    of RAM: 7b answers about 2.5 times slower, and a full run asks ~400 questions."""
-    best_gpu = max((g["vram_gb"] or 0 for g in gpu_list if g["vendor"] in ("nvidia", "amd")),
-                   default=0)
+def _largest(budget_gb: float, cap: str) -> str | None:
+    """The biggest qwen2.5 up to ``cap`` that fits in ``budget_gb`` of memory."""
+    fits = None
+    for name, gb in QWEN:
+        if gb + OVERHEAD_GB <= budget_gb:
+            fits = name
+        if name == cap:
+            break
+    return fits
+
+
+def recommend_models(ram: float | None, gpu_list: list[dict]) -> dict:
+    """Two qwen2.5 sizes for category-builder: llm:.
+
+    build       category-build-model: asks ~400 questions a run, so speed wins.
+                With a GPU, the biggest model that fits entirely in GPU memory
+                (up to 14b); without one, 3b (7b answers ~2.5x slower on a CPU).
+    definition  category-definition-model: one call per category, so quality
+                wins: the biggest model that fits in GPU memory plus most of the
+                RAM (Ollama splits a model across both). Without a GPU it stops
+                at 14b, so a draft still takes a minute or two, not ten.
+    """
+    vram = max((g["vram_gb"] or 0 for g in gpu_list if g["vendor"] in ("nvidia", "amd")), default=0)
     apple = next((g for g in gpu_list if g["vendor"] == "apple"), None)
-    if best_gpu >= 8:
-        return {"model": "qwen2.5:7b", "reason": f"GPU with {best_gpu} GB of memory"}
-    if apple and (apple["vram_gb"] or 0) >= 16:
-        return {"model": "qwen2.5:7b", "reason": f"Apple Silicon with {apple['vram_gb']} GB"}
-    if ram is None:
-        return {"model": "qwen2.5:3b", "reason": "RAM unknown; the middle size"}
-    if ram >= 8:
-        where = f"GPU with {best_gpu} GB (too small for 7b)" if best_gpu else "no usable GPU"
-        return {"model": "qwen2.5:3b", "reason": f"{ram} GB RAM, {where}"}
-    return {"model": "qwen2.5:1.5b", "reason": f"only {ram} GB RAM"}
+    unified = (apple["vram_gb"] or 0) if apple else 0
+
+    # build: in GPU memory if there is a usable GPU
+    build = None
+    if vram:
+        build = _largest(vram, BUILD_CAP)
+        reason = f"the biggest that fits in the {vram} GB GPU"
+    elif unified:
+        # macOS lets the GPU use about two thirds of unified memory
+        build = _largest(unified * 0.6, BUILD_CAP)
+        reason = f"the biggest that fits in the GPU's share of {unified} GB unified memory"
+    if build is None:
+        if ram is None or ram >= 8:
+            build = "qwen2.5:3b"
+            reason = ("no usable GPU: 3b is the fast size that still answers well"
+                      if not (vram or unified) else "GPU too small for any size; 3b on the CPU")
+        else:
+            build, reason = "qwen2.5:1.5b", f"only {ram} GB RAM"
+    build_pick = {"model": build, "reason": reason}
+
+    # definition: as large as GPU memory plus most of the RAM allows
+    usable_ram = (ram or 8) * 0.7  # leave the rest to the OS and gpa-tools
+    if vram:
+        budget, cap = vram + usable_ram, ("qwen2.5:72b" if vram >= 48 else "qwen2.5:32b")
+        where = f"{vram} GB GPU + {round(usable_ram, 1)} GB of RAM"
+    elif unified:
+        budget, cap = unified * 0.7, ("qwen2.5:72b" if unified >= 96 else "qwen2.5:32b")
+        where = f"{unified} GB unified memory"
+    else:
+        budget, cap = usable_ram, "qwen2.5:14b"
+        where = f"{round(usable_ram, 1)} GB of RAM, no GPU (capped at 14b to keep a draft to minutes)"
+    definition = _largest(budget, cap) or build
+    if MODEL_GB[definition] < MODEL_GB[build]:
+        definition = build
+    definition_pick = {"model": definition, "reason": f"the biggest that fits in {where}"}
+
+    models = {build, definition}
+    download = round(sum(MODEL_GB[m] for m in models), 1)
+    return {"build": build_pick, "definition": definition_pick, "download_gb": download}
 
 
 # ---- software --------------------------------------------------------------
@@ -171,7 +225,7 @@ def python_info() -> dict:
         venv["version"] = run([str(venv_python), "-c", "import sys; print('%d.%d.%d' % sys.version_info[:3])"])
         missing = run([str(venv_python), "-c",
                        "import importlib.util as u; "
-                       "print(' '.join(m for m in ('yaml', 'flask', 'pytest') "
+                       "print(' '.join(m for m in ('yaml', 'flask', 'playwright', 'pytest') "
                        "if not u.find_spec(m)))"])
         venv["missing_packages"] = missing.split()
     return {"running": sys.version.split()[0], "candidates": found, "venv": venv,
@@ -204,7 +258,40 @@ def tools_info(config: dict) -> dict:
             entry["version"] = first[0] if first else ""
         found[tool] = entry
     found["micromamba"] = {"path": shutil.which("micromamba") or _micromamba_local()}
+    found["chrome"] = {"path": chrome_path()}
+    found["msedge"] = {"path": edge_path()}
     return found
+
+
+def chrome_path() -> str | None:
+    """Google Chrome, which the definer's chatgpt and gemini steps drive
+    (Playwright's channel="chrome" looks in these standard places)."""
+    if sys.platform == "darwin":
+        candidates = [Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")]
+    elif os.name == "nt":
+        candidates = [Path(os.environ[v]) / "Google/Chrome/Application/chrome.exe"
+                      for v in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA") if os.environ.get(v)]
+    else:
+        candidates = [Path("/opt/google/chrome/chrome")]
+    for path in candidates:
+        if path.exists():
+            return str(path)
+    return shutil.which("google-chrome") or shutil.which("google-chrome-stable")
+
+
+def edge_path() -> str | None:
+    """Microsoft Edge, the definer's next choice when there is no Chrome."""
+    if sys.platform == "darwin":
+        candidates = [Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge")]
+    elif os.name == "nt":
+        candidates = [Path(os.environ[v]) / "Microsoft/Edge/Application/msedge.exe"
+                      for v in ("PROGRAMFILES(X86)", "PROGRAMFILES") if os.environ.get(v)]
+    else:
+        candidates = [Path("/opt/microsoft/msedge/msedge")]
+    for path in candidates:
+        if path.exists():
+            return str(path)
+    return shutil.which("microsoft-edge") or shutil.which("microsoft-edge-stable")
 
 
 def _micromamba_local() -> str | None:
@@ -299,7 +386,23 @@ def jev_info(config: dict) -> dict:
 # ---- config ----------------------------------------------------------------
 
 # Keys an older config.yaml may still have, and what replaced them.
-OUTDATED_KEYS = {"llm-category": "category-builder: llm: (model, ollama-url)"}
+OUTDATED_KEYS = {"llm-category": "category-builder: llm: (category-build-model, ollama-url)"}
+DEFAULT_MODEL = "qwen2.5:3b"
+
+
+def llm_models(config: dict) -> dict:
+    """Same as category_builder.llm_models: the two Ollama models and the URL,
+    with an older config.yaml's keys used while the new ones are missing."""
+    llm = llm_settings(config)
+    definer = config.get("category-definer") if isinstance(config.get("category-definer"), dict) else {}
+    old = llm.get("model")
+    return {
+        "category-build-model": llm.get("category-build-model") or old or DEFAULT_MODEL,
+        "category-definition-model": (llm.get("category-definition-model") or definer.get("model")
+                                      or old or DEFAULT_MODEL),
+        "ollama-url": llm.get("ollama-url") or DEFAULT_OLLAMA_URL,
+        "definer-ollama-url": definer.get("ollama-url") or llm.get("ollama-url") or DEFAULT_OLLAMA_URL,
+    }
 
 
 def llm_settings(config: dict) -> dict:
@@ -315,11 +418,17 @@ def jev_settings(config: dict) -> dict:
     return {**JEV_DEFAULTS, **own}
 
 
+DEFINER_DEFAULTS = {"mode": "dev", "retries": 1, "browser": "auto"}
+DEFINER_MODES = {"dev": "chatgpt (window) -> gemini (window) -> ollama",
+                 "prod": "gemini (headless) -> ollama"}
+
+
 def definer_settings(config: dict) -> dict:
-    """category-definer:, with the keys it leaves out taken from the llm builder."""
+    """category-definer:, with its ollama model and URL from category-builder: llm:."""
     own = config.get("category-definer")
-    llm = {k: v for k, v in llm_settings(config).items() if k in ("model", "ollama-url")}
-    return {"provider": "ollama", **llm, **(own if isinstance(own, dict) else {})}
+    models = llm_models(config)
+    return {**DEFINER_DEFAULTS, **(own if isinstance(own, dict) else {}),
+            "model": models["category-definition-model"], "ollama-url": models["definer-ollama-url"]}
 
 
 def read_config() -> tuple[dict, str]:
@@ -343,16 +452,27 @@ def config_info(config: dict, status: str) -> dict:
         if key in config:
             folder = Path(str(config[key])).expanduser()
             info[key] = {"value": str(config[key]), "exists": folder.is_dir()}
-    llm = llm_settings(config)
-    info["model"] = llm.get("model")
-    info["ollama-url"] = llm.get("ollama-url")
+    models = llm_models(config)
+    for key in ("category-build-model", "category-definition-model", "ollama-url"):
+        info[key] = models[key]
     info["active-category-builder"] = config.get("active-category-builder")
     builders = config.get("category-builder") or {}
     info["jev-configured"] = isinstance(builders, dict) and "jev" in builders
     definer = definer_settings(config)
-    info["definer"] = {k: definer.get(k) for k in ("provider", "model", "ollama-url")}
+    info["definer"] = {k: definer.get(k) for k in ("mode", "retries", "browser", "ollama-url")}
     # An older config.yaml: those keys are ignored now; configure.py won't move them.
     info["outdated"] = {k: v for k, v in OUTDATED_KEYS.items() if k in config}
+    if "provider" in definer:
+        info["outdated"]["category-definer: provider"] = "category-definer: mode: dev or prod"
+    # Still read while the new keys are missing, but replaced by them.
+    own = config.get("category-definer") if isinstance(config.get("category-definer"), dict) else {}
+    if "model" in llm_settings(config):
+        info["outdated"]["category-builder: llm: model"] = \
+            "category-build-model and category-definition-model"
+    for key, instead in (("model", "category-builder: llm: category-definition-model"),
+                         ("ollama-url", "category-builder: llm: ollama-url")):
+        if key in own:
+            info["outdated"][f"category-definer: {key}"] = instead
     info["tool-folders"] = tool_folders(config)
     return info
 
@@ -361,7 +481,7 @@ def gather() -> dict:
     config, status = read_config()
     ram = ram_gb()
     gpu_list = gpus()
-    recommended = recommend_model(ram, gpu_list)
+    recommended = recommend_models(ram, gpu_list)
     free = shutil.disk_usage(Path.home()).free / 1024 ** 3
     return {
         "project": str(PROJECT_ROOT),
@@ -369,8 +489,7 @@ def gather() -> dict:
         "ram_gb": ram,
         "gpus": gpu_list,
         "disk_free_gb": round(free, 1),
-        "recommended_model": {**recommended, "download_gb": MODEL_GB[recommended["model"]],
-                              "fits_disk": free > MODEL_GB[recommended["model"]] + 2},
+        "recommended_models": {**recommended, "fits_disk": free > recommended["download_gb"] + 2},
         "python": python_info(),
         "tools": tools_info(config),
         "ollama": ollama_info(config),
@@ -387,23 +506,30 @@ def as_text(r: dict) -> str:
         + (" WSL" if o.get("wsl") else "") + (" [running as admin]" if o["admin"] else ""),
         f"RAM       {r['ram_gb']} GB    free disk {r['disk_free_gb']} GB",
         "GPU       " + (", ".join(f"{g['name']} ({g['vram_gb'] or '?'} GB)" for g in r["gpus"]) or "none usable"),
-        f"model     {r['recommended_model']['model']}  ({r['recommended_model']['reason']})",
+        f"build     {r['recommended_models']['build']['model']}  ({r['recommended_models']['build']['reason']})",
+        f"define    {r['recommended_models']['definition']['model']}  "
+        f"({r['recommended_models']['definition']['reason']}); download {r['recommended_models']['download_gb']} GB",
         "python    " + (", ".join(f"{k} {v['version']}" for k, v in p["candidates"].items()) or "none found")
         + f"; uv: {p['uv'] or 'no'}",
         f"venv      {yes(p['venv']['exists'])}" + (f" ({p['venv'].get('version')}, missing: "
                                                    f"{' '.join(p['venv']['missing_packages']) or 'nothing'})"
                                                    if p["venv"]["exists"] else ""),
     ]
-    for tool in ("pdftotext", "micromamba"):
+    for tool in ("pdftotext", "micromamba", "chrome", "msedge"):
         lines.append(f"{tool:<11}{t[tool]['path'] or 'not found'}")
     lines.append(f"ollama    {ol['binary'] or 'not found'}" + (f" ({ol['version']})" if ol["version"] else ""))
     for s in ol["servers"]:
         lines.append(f"  {s['url']}: " + (f"answers, version {s['version']}, models: {', '.join(s['models']) or 'none'}"
                                           if s["reachable"] else f"no answer ({s['error']})"))
     lines.append(f"config    {c['status']}; builder {c['active-category-builder']}; "
-                 f"llm model {c['model']}; ollama-url {c['ollama-url']}")
+                 f"llm category-build-model {c['category-build-model']}, "
+                 f"category-definition-model {c['category-definition-model']}; "
+                 f"ollama-url {c['ollama-url']}")
     d = c["definer"]
-    lines.append(f"  definer: {d['provider']} {d['model']} at {d['ollama-url']}")
+    steps = DEFINER_MODES.get(d["mode"], "UNKNOWN MODE (use dev or prod)")
+    lines.append(f"  definer: mode {d['mode']}: {steps}; ollama {c['category-definition-model']} "
+                 f"at {d['ollama-url']}; "
+                 f"retries {d['retries']}; browser {d['browser']}")
     j = r["jev"]
     jev = (f"  jev: {j['model']}" + ("" if c["jev-configured"] else " (default; no category-builder: jev: section)")
            + f"; key in ${j['api-key-env']}: {'set' if j['key_set'] else 'not set'}")
@@ -416,7 +542,7 @@ def as_text(r: dict) -> str:
             jev += f"; API: {api['error']}"
     lines.append(jev)
     for key, instead in c["outdated"].items():
-        lines.append(f"  OUTDATED: '{key}:' is no longer read; use {instead}")
+        lines.append(f"  OUTDATED: '{key}:' is from an older config.yaml; use {instead}")
     for key in ("pdf-folder", "work-folder", "out-folder", "log-folder"):
         if key in c:
             lines.append(f"  {key}: {c[key]['value']}" + ("" if c[key]["exists"] else "  (does not exist)"))

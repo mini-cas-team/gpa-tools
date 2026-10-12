@@ -1,6 +1,6 @@
 ---
 name: install-gpa-tools
-description: Install gpa-tools on this machine and get it running - Python venv and packages, pdftotext, Ollama, an LLM model sized to the machine's RAM and GPU, the optional TypeSafe jev builder (API key in an environment variable), and config.yaml (folders, model, ollama-url, active builder). Use when the user asks to install, set up or repair gpa-tools or its dependencies, to add or fix the jev builder, when config.yaml is missing, or when Ollama/the model/TypeSafe is not reachable.
+description: Install gpa-tools on this machine and get it running - Python venv and packages, pdftotext, Ollama, two LLM models sized to the machine's RAM and GPU (a fast build model that fits in the GPU, and the largest definition model that fits), the optional TypeSafe jev builder (API key in an environment variable), the category-definer (dev: ChatGPT, then Gemini in browser windows, then Ollama; prod: Gemini headless, then Ollama), and config.yaml (folders, model, ollama-url, active builder, definer mode). Use when the user asks to install, set up or repair gpa-tools or its dependencies, to add or fix the jev builder, when config.yaml is missing, or when Ollama/the model/TypeSafe is not reachable.
 ---
 
 # Installing gpa-tools
@@ -46,13 +46,14 @@ python3 install/check.py             # JSON, when you need a detail
 It reports the OS, RAM, GPU, free disk, Python and venv, pdftotext, the
 Ollama binary, whether a server answers at
 `http://localhost:11434` (and at any `ollama-url` already in config.yaml) with
-its models, the config.yaml folders, the llm builder's and the definer's
-model, `recommended_model`, and the jev builder: its model, whether the key
+its models, Chrome and Edge, the config.yaml folders, the two Ollama models
+(`category-build-model`, `category-definition-model`), the definer's mode,
+`recommended_models` (a build and a definition model), and the jev builder: its model, whether the key
 variable is set in this shell (never its value) and, if so, whether TypeSafe
 accepts the key and the model. If `config.outdated` is not empty, config.yaml
-is from before category builders: tell the user which keys are no longer read,
-then run configure.py with the model and URL they had there and delete the
-old block once the user agrees.
+is from an older version: tell the user which keys are outdated, then run
+configure.py with the model and URL they had there and delete the old keys
+once the user agrees.
 
 If no Python runs at all, do step 1b first and then run `check.py` with
 `uv run --python 3.12 install/check.py --text`.
@@ -158,35 +159,50 @@ Look at check.py's `ollama` section.
 
 The URL that answered is the one to save.
 
-## Step 5 — the model
+## Step 5 — the two models
 
-Use check.py's `recommended_model`. These are qwen2.5 sizes, so answers stay
-comparable with earlier runs:
+`category-builder: llm:` has two Ollama models, picked differently. Use
+check.py's `recommended_models` (all qwen2.5 sizes, so answers stay comparable
+with earlier runs):
 
-| machine | model |
-|---|---|
-| NVIDIA/AMD GPU with 8 GB+ memory, or Apple Silicon with 16 GB+ | `qwen2.5:7b` |
-| 8 GB+ RAM otherwise (CPU-only machines included: 7b is ~2.5x slower on CPU) | `qwen2.5:3b` |
-| under 8 GB RAM | `qwen2.5:1.5b` |
+- **`build`** → `category-build-model`. The llm builder asks it ~400 yes/no
+  questions per run, so **speed wins**:
+  - With a GPU: the biggest size that fits **entirely in GPU memory** (download
+    size + 1.5 GB), up to 14b.
+  - Without one: 3b, because 7b is about 2.5 times slower on a CPU. Under 8 GB
+    RAM: 1.5b.
+- **`definition`** → `category-definition-model`. The definer asks it once
+  per category, so **quality wins**:
+  - With a GPU: the biggest size that fits in GPU memory plus 70% of RAM, up
+    to 32b (72b with a 48 GB+ GPU). Ollama splits a model across GPU and CPU.
+  - Without a GPU: 70% of RAM, capped at 14b, so a draft takes a minute or two
+    rather than ten.
 
-**Ask** the user to accept it or pick another, and show the reason check.py
-gives. If config.yaml already names a different model, say that switching
-discards the llm builder's cached answers, so the next run asks every course
-again (hours on a CPU). `--model` sets both `category-builder.llm` and
-`category-definer`; add `--definer-model <bigger>` only if the user wants
-drafts from a stronger model than the classifier.
+| machine | build | definition |
+|---|---|---|
+| no GPU, 12 GB RAM | 3b | 7b |
+| no GPU, 32 GB+ RAM | 3b | 14b |
+| GPU 8 GB, 16 GB RAM | 7b | 14b |
+| GPU 12–24 GB | 14b | 32b |
+| GPU 48 GB+, 128 GB RAM | 14b | 72b |
+
+**Ask** the user to accept both or pick others. Show check.py's reasons and
+`download_gb`, which is both models together; `fits_disk` says whether there
+is room. If config.yaml already names a different build model, say that
+switching it discards the llm builder's cached answers, so the next run asks
+every course again (hours on a CPU). Changing the definition model clears
+nothing.
 
 ```bash
-python3 install/ollama_check.py pull <url> <model>   # skip if the server already lists it; minutes
-python3 install/ollama_check.py ask  <url> <model>   # one real yes/no question; the first loads the model
-$PY install/configure.py --model <model> --ollama-url <url>
+python3 install/ollama_check.py pull <url> <build-model>        # skip any the server already lists; minutes
+python3 install/ollama_check.py pull <url> <definition-model>
+python3 install/ollama_check.py ask  <url> <build-model>        # one real yes/no question; the first loads the model
+$PY install/configure.py --model <build-model> --definer-model <definition-model> --ollama-url <url>
 ```
 
-If the user wants the definer on a bigger model, `pull` that one too and add
-`--definer-model <it>`; otherwise the definer uses the same model.
-
-Run `pull` in the background with a long timeout, and tell the user it's
-downloading.
+When both picks are the same model, pull it once and leave out
+`--definer-model`. Run the pulls in the background with a long timeout and
+tell the user they're downloading. A 32b or 72b download is tens of GB.
 
 ## Step 6 — the jev builder (TypeSafe), optional
 
@@ -231,15 +247,46 @@ to the `ask` below.
    $PY install/configure.py --jev-model jev-1.13.0 --active-builder jev   # make jev active
    ```
 
-The definer that drafts missing category definitions still uses Ollama, so
-keep steps 4–5 even with jev active, unless the user will write every
-definition by hand (`llm_category/archive/definitions.yaml` has STEM).
+Ollama is still the definer's last fallback (step 7), so keep steps 4–5 even
+with jev active.
 
-## Step 7 — verify and hand over
+## Step 7 — the category-definer
+
+The definer drafts a definition when the user adds a category. Its `mode`
+picks the steps, with one retry for each site:
+
+- **dev** (the default): ChatGPT → Gemini → Ollama. Each site opens a visible
+  browser window for about a minute, so it needs a desktop session.
+- **prod**: Gemini headless (no window) → Ollama. Use this on a server or any
+  machine without a desktop. ChatGPT isn't in prod because it blocks
+  headless browsers.
+
+The sites are used through their free web chats, with no account and no key.
+`category_definition_builder` has Playwright (from requirements.txt) drive the
+installed Chrome, else Edge, else Playwright's own Chromium. No extension is
+needed.
+
+**Ask** which mode fits this machine. Then set it:
+```bash
+$PY install/configure.py --definer-mode prod    # dev is already the default
+```
+
+- If check.py shows neither `chrome` nor `msedge`, **Ask** before
+  downloading Playwright's Chromium (about 150 MB, no admin needed):
+  `$PY -m playwright install chromium`. Without any browser, the site steps
+  fail and Ollama drafts every definition.
+- **Ask** before a test draft. It sends "define STEM" to the site, and in
+  dev it opens a window. Nothing is saved:
+  ```bash
+  $PY -m category_definition_builder STEM --only gemini
+  ```
+  If a site fails, the chain still falls back to Ollama. Say so and go on.
+
+## Step 8 — verify and hand over
 
 ```bash
 python3 install/check.py --text
-$PY -m pytest tests -q       # needs neither Ollama nor pdftotext
+$PY -m pytest tests -q       # needs neither Ollama, pdftotext nor Chrome
 ```
 
 If the transcripts folder already has PDFs, offer to convert them:
@@ -247,8 +294,11 @@ If the transcripts folder already has PDFs, offer to convert them:
 
 Then tell the user:
 - what was installed and where, and what was skipped because it was already there
-- the model and the ollama-url saved in config.yaml (builder `llm`, and the
-  definer's model if different)
+- the two models and the ollama-url saved in config.yaml
+  (`category-build-model`, `category-definition-model`)
+- the definer's mode (dev: chatgpt → gemini → ollama in windows; prod: gemini
+  headless → ollama) and that
+  each try is logged to `<log-folder>/category_definer.log`
 - if jev was set up: its model, the key variable's name, and which builder is
   active. The app reads the key at run time, so it must start from a shell
   where the variable is set (not from a launcher that skips the profile)
@@ -281,3 +331,7 @@ Then tell the user:
 | `HTTP 401` from TypeSafe | Wrong or revoked key: create a new one in the console and re-export it. |
 | `Unknown model: …` | Not a TypeSafe model name: `jev_check.py probe` lists aliases; versioned IDs like `jev-1.13.0` work too. |
 | `out of funds` | The TypeSafe balance is $0.00; the user adds funds in the console. |
+| `no usable browser: chrome, msedge, playwright chromium not installed` | No Chrome or Edge where Playwright looks. Run `$PY -m playwright install chromium`, or leave it: Ollama drafts instead. |
+| `Missing X server or $DISPLAY` (dev mode) | No desktop session (SSH, a server). Use `--definer-mode prod`. |
+| `no DEFINITION: in the reply`, or timeouts for one site every time | The site changed its page layout or wording. The chain falls back to the next step. Fixing it means updating the selectors in `category_definition_builder/browser_legs.py`. |
+| `playwright` in check.py's `missing` | Re-run `$PY -m pip install -r requirements.txt`. |

@@ -61,6 +61,31 @@ def settings(cfg: dict, name: str) -> dict:
     return dict((cfg.get("category-builder") or {}).get(name) or {})
 
 
+DEFAULT_MODEL = "qwen2.5:3b"
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
+
+
+def llm_models(cfg: dict) -> dict:
+    """The two Ollama models in category-builder: llm: and its ollama-url.
+
+        category-build-model       the llm builder's yes/no answers
+        category-definition-model  category-definer's ollama step
+
+    Older config.yaml keys still count when the new ones are missing: llm's
+    ``model`` (both), and category-definer's ``model`` and ``ollama-url``.
+    """
+    llm = settings(cfg, "llm")
+    definer = cfg.get("category-definer") if isinstance(cfg.get("category-definer"), dict) else {}
+    old = llm.get("model")
+    return {
+        "category-build-model": llm.get("category-build-model") or old or DEFAULT_MODEL,
+        "category-definition-model": (llm.get("category-definition-model") or definer.get("model")
+                                      or old or DEFAULT_MODEL),
+        "ollama-url": llm.get("ollama-url") or DEFAULT_OLLAMA_URL,
+        "definer-ollama-url": definer.get("ollama-url") or llm.get("ollama-url") or DEFAULT_OLLAMA_URL,
+    }
+
+
 def work_folder(cfg: dict) -> Path:
     if not cfg.get("work-folder"):
         raise KeyError("work-folder is not set in config.yaml")

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 import yaml
 
@@ -63,13 +65,100 @@ def test_definitions_rewrite_only_their_section(tmp_path):
 
 
 def test_definer_falls_back_to_the_llm_builder_settings():
-    cfg = {"category-builder": {"llm": {"model": "small", "ollama-url": "http://h:1"}}}
-    assert definer.load_config(cfg) == {"provider": "ollama", "model": "small",
-                                        "ollama-url": "http://h:1"}
-    cfg["category-definer"] = {"model": "big"}
-    assert definer.load_config(cfg)["model"] == "big"
-    with pytest.raises(ValueError, match="provider"):
-        definer.load_config({"category-definer": {"provider": "nope"}})
+    cfg = {"category-builder": {"llm": {"model": "small", "ollama-url": "http://h:1"}},
+           "work-folder": "/w", "log-folder": "/l"}
+    assert definer.load_config(cfg) == {
+        "mode": "dev", "retries": 1, "browser-timeout": 120, "browser": "auto",
+        "model": "small", "ollama-url": "http://h:1",
+        "profile-folder": Path("/w/browser-profiles"), "log-folder": Path("/l"),
+        "order": ["chatgpt", "gemini", "ollama"], "headless": {"chatgpt": False, "gemini": False}}
+    # an older config.yaml's provider: ollama is ignored
+    cfg["category-definer"] = {"model": "big", "provider": "ollama", "mode": "prod",
+                               "profile-folder": "/p"}
+    got = definer.load_config(cfg)
+    assert (got["model"], got["order"], got["headless"], got["profile-folder"]) == (
+        "big", ["gemini", "ollama"], {"gemini": True}, Path("/p"))
+    assert "provider" not in got
+    assert definer.describe(got) == "prod: gemini (headless) -> ollama big at http://h:1"
+    with pytest.raises(ValueError, match="'test'"):
+        definer.load_config({"category-definer": {"mode": "test"}})
+    with pytest.raises(ValueError, match="'firefox'"):
+        definer.load_config({"category-definer": {"browser": "firefox"}})
+
+
+def test_llm_models_reads_the_two_models_and_older_keys():
+    assert category_builder.llm_models({}) == {
+        "category-build-model": "qwen2.5:3b", "category-definition-model": "qwen2.5:3b",
+        "ollama-url": "http://localhost:11434", "definer-ollama-url": "http://localhost:11434"}
+    cfg = {"category-builder": {"llm": {"category-build-model": "b", "category-definition-model": "d",
+                                        "ollama-url": "http://h:1", "model": "old"}},
+           "category-definer": {"model": "older"}}
+    models = category_builder.llm_models(cfg)
+    assert (models["category-build-model"], models["category-definition-model"]) == ("b", "d")
+    assert definer.load_config(cfg)["model"] == "d"
+    del cfg["category-builder"]["llm"]["category-definition-model"]
+    assert definer.load_config(cfg)["model"] == "older"
+
+
+def test_definer_modes_pass_headless_and_browser_to_the_sites(monkeypatch):
+    made = []
+
+    class Client:
+        def __init__(self, site, profile_root, timeout, headless, browser):
+            made.append((site, timeout, headless, browser))
+
+        def define(self, category):
+            raise OSError("down")
+
+    monkeypatch.setattr("category_definition_builder.BrowserClient", Client)
+    for step in definer.BROWSER_STEPS:  # undo conftest's no_browser for this test
+        monkeypatch.setitem(definer.PROVIDERS, step, definer._browser(step))
+    monkeypatch.setitem(definer.PROVIDERS, "ollama", lambda c: FakeLLM())
+    cfg = {"category-definer": {"retries": 0, "browser": "msedge", "browser-timeout": 9}}
+    assert definer.draft(cfg, "LAW").source == "ollama"
+    assert made == [("chatgpt", 9, False, "msedge"), ("gemini", 9, False, "msedge")]
+    made.clear()
+    cfg["category-definer"]["mode"] = "prod"
+    assert definer.draft(cfg, "LAW").source == "ollama"
+    assert made == [("gemini", 9, True, "msedge")]
+    with pytest.raises(ValueError, match="chatgpt is not a step of mode prod"):
+        definer.draft(cfg, "LAW", only="chatgpt")
+
+
+def test_definer_tries_steps_in_order_and_logs_every_attempt(tmp_path, monkeypatch):
+    calls = []
+
+    class Flaky:
+        """chatgpt fails both tries, gemini's first try fails, its retry works."""
+
+        def __init__(self, step):
+            self.step = step
+
+        def define(self, category):
+            calls.append(self.step)
+            if self.step == "chatgpt" or calls.count("gemini") == 1:
+                raise OSError(f"{self.step} down")
+            return f"{category} from {self.step}."
+
+    for step in ("chatgpt", "gemini", "ollama"):
+        monkeypatch.setitem(definer.PROVIDERS, step, lambda c, s=step: Flaky(s))
+    cfg = {"log-folder": str(tmp_path / "log")}
+    draft = definer.draft(cfg, "LAW")
+    assert (draft.definition, draft.source) == ("LAW from gemini.", "gemini")
+    assert calls == ["chatgpt", "chatgpt", "gemini", "gemini"]  # ollama never asked
+    assert [(a.step, a.attempt, a.error) for a in draft.attempts] == [
+        ("chatgpt", 1, "OSError: chatgpt down"), ("chatgpt", 2, "OSError: chatgpt down"),
+        ("gemini", 1, "OSError: gemini down"), ("gemini", 2, None)]
+    log = (tmp_path / "log" / definer.LOG_NAME).read_text()
+    assert "LAW: drafted by gemini (3 failure(s))" in log
+    assert "  chatgpt try 2 (0.0s) failed: OSError: chatgpt down" in log
+
+    cfg["category-definer"] = {"retries": 0}
+    with pytest.raises(definer.DraftFailed) as failed:
+        definer.draft(cfg, "ART", only="chatgpt")
+    assert [a.step for a in failed.value.attempts] == ["chatgpt"]
+    assert isinstance(failed.value, OSError)
+    assert "ART: every step failed (1 failure(s))" in (tmp_path / "log" / definer.LOG_NAME).read_text()
 
 
 def test_definition_for_drafts_once(tmp_path, monkeypatch):
@@ -77,8 +166,9 @@ def test_definition_for_drafts_once(tmp_path, monkeypatch):
     monkeypatch.setitem(definer.PROVIDERS, "ollama", lambda c: llm)
     config = tmp_path / "config.yaml"
     config.write_text("a: 1\n", encoding="utf-8")
-    assert definer.definition_for(config, {}, "STEM") == ("STEM means science.", True)
-    assert definer.definition_for(config, {}, "STEM") == ("STEM means science.", False)
+    cfg = {"log-folder": str(tmp_path / "log")}
+    assert definer.definition_for(config, cfg, "STEM") == ("STEM means science.", True)
+    assert definer.definition_for(config, cfg, "STEM") == ("STEM means science.", False)
     assert llm.defined == ["STEM"]
 
 

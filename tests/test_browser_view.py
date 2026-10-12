@@ -230,27 +230,45 @@ def fake_llm(monkeypatch):
 def test_categories_list_config_definitions_in_file_order(client, folders):
     data = client.get("/categories").get_json()
     assert data == {"categories": {"STEM": "Science and maths."}, "names": ["STEM"],
-                    "path": str(folders[1]), "builders": ["llm", "jev"], "active_builder": "llm"}
+                    "path": str(folders[1]), "builders": ["llm", "jev"], "active_builder": "llm",
+                    "definer": ["chatgpt (window)", "gemini (window)", "ollama"]}
     config = folders[1]
     config.write_text(config.read_text().replace(
         "  STEM: Science and maths.\n", "  ZOO: Animals.\n  STEM: Science and maths.\n"))
     assert client.get("/categories").get_json()["names"] == ["ZOO", "STEM"]
 
 
-def test_draft_asks_the_llm_without_saving(client, fake_llm, folders):
+def test_draft_falls_back_to_the_llm_without_saving(client, fake_llm, folders):
     data = client.post("/categories/draft", data={"name": " business "}).get_json()
-    assert data == {"name": "BUSINESS", "definition": "BUSINESS means science."}
+    assert (data["name"], data["definition"], data["source"]) == (
+        "BUSINESS", "BUSINESS means science.", "ollama")
+    # chatgpt and gemini (no browser in tests) each fail twice: one try plus one retry
+    assert [(a["step"], a["attempt"], a["error"] is None) for a in data["attempts"]] == [
+        ("chatgpt", 1, False), ("chatgpt", 2, False), ("gemini", 1, False),
+        ("gemini", 2, False), ("ollama", 1, True)]
+    assert "no browser in tests" in data["attempts"][0]["error"]
     assert "BUSINESS" not in folders[1].read_text()
 
 
-def test_draft_reports_an_unreachable_llm(client, monkeypatch):
+def test_draft_reports_every_failed_try(client, monkeypatch):
     class Down(FakeLLM):
         def define(self, category):
             raise OSError("refused")
 
     monkeypatch.setitem(definer.PROVIDERS, "ollama", lambda c: Down())
     r = client.post("/categories/draft", data={"name": "LAW"})
-    assert r.status_code == 502 and "refused" in r.get_json()["error"]
+    data = r.get_json()
+    assert r.status_code == 502 and "every step failed" in data["error"]
+    assert [a["step"] for a in data["attempts"]] == ["chatgpt", "chatgpt", "gemini", "gemini", "ollama"]
+    assert "refused" in data["attempts"][-1]["error"]
+
+
+def test_draft_rejects_an_unknown_definer_mode(client, folders):
+    config = folders[1]
+    config.write_text(config.read_text() + "category-definer:\n  mode: nope\n")
+    r = client.post("/categories/draft", data={"name": "LAW"})
+    assert r.status_code == 400 and "nope" in r.get_json()["error"]
+    assert client.get("/categories").get_json()["definer"] == []
 
 
 def test_save_writes_only_the_definitions_section(client, folders):

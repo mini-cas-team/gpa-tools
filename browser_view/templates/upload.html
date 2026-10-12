@@ -171,7 +171,7 @@
   const addForm = $("category-add-form"), nameInput = $("category-name");
   const progressBox = $("category-progress"), bar = $("category-progress-bar");
   const progressText = $("category-progress-text"), status = $("category-status");
-  let categories = {}, names = [];
+  let categories = {}, names = [], definerSteps = [];
   let poller = null;
   let action = null;  // the active button: "update", "add" or none
 
@@ -189,8 +189,24 @@
   async function call(url, options) {
     const response = await fetch(url, options);
     const data = await response.json().catch(() => ({ error: `server returned ${response.status}` }));
-    if (!response.ok) throw new Error(data.error || `server returned ${response.status}`);
+    if (!response.ok) {
+      const err = new Error(data.error || `server returned ${response.status}`);
+      err.data = data;  // e.g. the definer's attempts
+      throw err;
+    }
     return data;
+  }
+  // category-definer's tries, in order: each failure, then the one that worked.
+  function attemptList(attempts) {
+    const list = document.createElement("ul");
+    list.className = "notes";
+    for (const a of attempts || []) {
+      const item = document.createElement("li");
+      item.textContent = `${a.step} try ${a.attempt} (${a.seconds} s): ` +
+        (a.error === null ? "ok" : `failed: ${a.error}`);
+      list.append(item);
+    }
+    return list;
   }
   const post = (fields) => {
     const body = new FormData();
@@ -245,6 +261,7 @@
     const data = await call("/categories");
     categories = data.categories || {};
     names = data.names || Object.keys(categories);
+    definerSteps = data.definer || [];
     $("category-path").textContent = data.path;
     if (!builderSelect.options.length) {  // kept across reloads: the user's pick wins
       builderSelect.replaceChildren(...(data.builders || []).map((b) => new Option(b, b)));
@@ -263,26 +280,31 @@
   $("category-update-cancel").addEventListener("click", () => setMode("view"));
   $("category-add-cancel").addEventListener("click", () => setMode("view"));
 
-  // ---- Add -> Go: the LLM drafts, the draft is saved, then Update ----------
+  // ---- Add -> Go: category-definer drafts, the draft is saved, then Update -
   addForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const name = nameInput.value.trim().toUpperCase();
     showStatus(null);
     setMode("busy");
     const started = Date.now();
+    const steps = definerSteps.join(", then ") || "category-definer";
     const tick = () => progress(
-      `Asking the LLM to define ${name}… ${minutes((Date.now() - started) / 1000)}`);
+      `Asking ${steps} to define ${name} (a Chrome window may open)… ` +
+      `${minutes((Date.now() - started) / 1000)}`);
     tick();
     const timer = setInterval(tick, 1000);
     try {
       const draft = await call("/categories/draft", post({ name }));
       await call("/categories", post({ name: draft.name, definition: draft.definition }));
       await load(draft.name);
-      showStatus("ok", `${draft.name} drafted by category-definer and saved to config.yaml. ` +
-        `Edit it if needed, then Go to run the ${builderSelect.value} builder on it.`);
+      const failed = draft.attempts.filter((a) => a.error !== null);
+      showStatus("ok", [`${draft.name} drafted by ${draft.source} and saved to config.yaml. ` +
+        `Edit it if needed, then Go to run the ${builderSelect.value} builder on it.`,
+        ...(failed.length ? [attemptList(draft.attempts)] : [])]);
       setMode("update");
     } catch (err) {
-      showStatus("error", `Error: ${err.message}`);
+      showStatus("error", [`Error: ${err.message}`,
+        ...(err.data?.attempts ? [attemptList(err.data.attempts)] : [])]);
       setMode("add");
     } finally {
       clearInterval(timer);

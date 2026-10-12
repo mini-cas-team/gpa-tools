@@ -6,7 +6,8 @@ the builder CSVs into <work-folder>/llm/.  Settings come from config.yaml:
 
     category-builder:
       llm:
-        model: qwen2.5:3b
+        category-build-model: qwen2.5:3b       # this builder's yes/no answers
+        category-definition-model: qwen2.5:3b  # category-definer's ollama step
         ollama-url: http://localhost:11434
 """
 
@@ -29,10 +30,6 @@ from .store import AnswerCache
 
 NAME = "llm"
 log = logging.getLogger("llm_category")
-DEFAULTS = {
-    "model": "qwen2.5:3b",
-    "ollama-url": "http://localhost:11434",
-}
 # Seconds per LLM answer when no run has been timed yet (the first full STEM
 # run on this machine: 390 answers in about 85 minutes).
 FALLBACK_SECONDS_PER_ANSWER = 13.0
@@ -40,13 +37,13 @@ FALLBACK_SECONDS_PER_ANSWER = 13.0
 
 def load_config(path: Path) -> dict:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    llm_cfg = {**DEFAULTS, **category_builder.settings(raw, NAME)}
+    models = category_builder.llm_models(raw)
     return {
         "in": category_builder.work_folder(raw),
         "folder": category_builder.folder(raw, NAME),
         "log": Path(raw.get("log-folder") or "log").expanduser(),
-        "model": llm_cfg["model"],
-        "url": llm_cfg["ollama-url"],
+        "model": models["category-build-model"],
+        "url": models["ollama-url"],
         "config": path,
         "raw": raw,
     }
@@ -126,9 +123,13 @@ def run(cfg: dict, category: str, limit: int | None = None, progress=None) -> Pa
     client = OllamaClient(cfg["url"], cfg["model"])
     try:
         definition, drafted = definer.definition_for(cfg["config"], cfg["raw"], category)
-        if drafted:
-            log.info("No definition for %s; category-definer drafted one and it was saved "
-                     "to %s:\n  %s", category, cfg["config"], definition)
+    except OSError as exc:  # drafting a missing definition runs category-definer's steps
+        raise RunError(f"No definition for {category} and category-definer "
+                       f"({definer.describe(definer.load_config(cfg['raw']))}) failed: {exc}") from None
+    if drafted:
+        log.info("No definition for %s; category-definer drafted one and it was saved "
+                 "to %s:\n  %s", category, cfg["config"], definition)
+    try:
         cache = _cache(cfg, category, definition)
         if cache.reset:
             log.info("Definition or model changed since the last run; cached answers discarded.")

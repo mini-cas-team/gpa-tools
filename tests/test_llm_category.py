@@ -47,7 +47,11 @@ def test_load_config_reads_category_builder_llm(tmp_path):
     config.write_text("work-folder: /w\ncategory-builder:\n  llm:\n    model: big\n"
                       "    ollama-url: http://h:1\n", encoding="utf-8")
     cfg = llm_run.load_config(config)
-    assert (cfg["model"], cfg["url"]) == ("big", "http://h:1")
+    assert (cfg["model"], cfg["url"]) == ("big", "http://h:1")  # an older config.yaml's key
+    config.write_text("work-folder: /w\ncategory-builder:\n  llm:\n    model: old\n"
+                      "    category-build-model: build\n    category-definition-model: define\n",
+                      encoding="utf-8")
+    assert llm_run.load_config(config)["model"] == "build"
 
 
 def test_ollama_client_posts_a_schema_and_reads_the_answer(monkeypatch):
@@ -134,9 +138,18 @@ def test_run_without_transcripts_or_ollama_is_a_run_error(cfg, monkeypatch):
         def define(self, category):
             raise OSError("connection refused")
 
+        def is_member(self, category, definition, code, title):
+            raise OSError("connection refused")
+
     common_json(cfg["in"], "ann", [("MATH 1", "Calc", "A", 3, 4.0)])
     monkeypatch.setattr(llm_run, "OllamaClient", lambda url, model: Down())
     monkeypatch.setitem(definer.PROVIDERS, "ollama", lambda c: Down())
+    # No definition, and every definer step fails: each try is in the message.
+    with pytest.raises(RunError, match="No definition for STEM .* gemini try 2 .*"
+                                       "ollama try 1 .* connection refused"):
+        llm_run.run(cfg, "STEM")
+    with cfg["config"].open("a", encoding="utf-8") as fh:
+        fh.write("category-definitions:\n  STEM: Science.\n")
     with pytest.raises(RunError, match="Cannot reach Ollama"):
         llm_run.run(cfg, "STEM")
 
@@ -151,3 +164,32 @@ def test_cli_runs_the_llm_builder_and_publishes(cfg, fake_llm, capsys):
     assert cli.main(["--config", str(cfg["config"]), "--category", "stem", "--publish"]) == 0
     assert (out / "stem_gpa.csv").read_text() == (cfg["folder"] / "stem_gpa.csv").read_text()
     assert "published" in capsys.readouterr().out
+
+
+def test_each_model_does_its_own_work(tmp_path, monkeypatch):
+    """category-definition-model only drafts; category-build-model only answers."""
+    calls = []
+
+    class Recorder:
+        def __init__(self, url, model, timeout=300):
+            self.model = model
+
+        def define(self, category):
+            calls.append((self.model, "define"))
+            return f"{category} means maths."
+
+        def is_member(self, category, definition, code, title):
+            calls.append((self.model, "is_member"))
+            return True
+
+    monkeypatch.setattr("llm_category.llm.OllamaClient", Recorder)  # the definer's import
+    monkeypatch.setattr(llm_run, "OllamaClient", Recorder)  # the builder's
+    monkeypatch.setitem(definer.PROVIDERS, "ollama", definer._ollama)  # undo conftest's no_browser
+    config = tmp_path / "config.yaml"
+    config.write_text(f"work-folder: {tmp_path / 'work'}\nlog-folder: {tmp_path / 'log'}\n"
+                      "category-builder:\n  llm:\n    category-build-model: small\n"
+                      "    category-definition-model: big\n", encoding="utf-8")
+    common_json(tmp_path / "work", "ann", [("MATH 1", "Calc", "A", 3, 4.0),
+                                           ("PHYS 1", "Mechanics", "B", 3, 3.0)])
+    llm_run.run(llm_run.load_config(config), "STEM")  # no STEM definition yet: drafts one first
+    assert calls == [("big", "define"), ("small", "is_member"), ("small", "is_member")]
