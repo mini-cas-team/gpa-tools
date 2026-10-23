@@ -1,0 +1,206 @@
+{# The student dialog, shared by Transcripts → View and Recommendations → View.
+   openStudent(file, {builder, category, title}) opens it for the transcript
+   named ``file``: a Transcript tab (PDF and, given a category, its courses) and
+   a Recommendation letters tab (each letter's post_rank rank and its PDF). #}
+<dialog id="student-dialog" aria-labelledby="student-title">
+  <div class="dialog-head">
+    <div>
+      <h2 id="student-title"></h2>
+      <p class="hint" id="student-meta"></p>
+    </div>
+    <button type="button" class="close" aria-label="Close">×</button>
+  </div>
+  <div class="dialog-tabs" role="tablist">
+    <button type="button" role="tab" id="tab-transcript" aria-controls="panel-transcript" aria-selected="true">Transcript</button>
+    <button type="button" role="tab" id="tab-letters" aria-controls="panel-letters" aria-selected="false">Recommendation letters</button>
+  </div>
+  <div class="dialog-body" id="panel-transcript" role="tabpanel" aria-labelledby="tab-transcript">
+    <section class="pdf-pane" id="pdf-pane" aria-label="Original transcript"></section>
+    <section class="courses-pane" id="courses-pane" aria-label="Extracted courses"></section>
+  </div>
+  <div class="dialog-body" id="panel-letters" role="tabpanel" aria-labelledby="tab-letters" hidden>
+    <section class="pdf-pane" id="letter-pdf-pane" aria-label="Recommendation letter"></section>
+    <section class="courses-pane" id="letters-pane" aria-label="Recommendation letters"></section>
+  </div>
+</dialog>
+
+<script>
+window.openStudent = (() => {
+  const dialog = document.getElementById("student-dialog");
+  const title = document.getElementById("student-title");
+  const meta = document.getElementById("student-meta");
+  const pdfPane = document.getElementById("pdf-pane");
+  const coursesPane = document.getElementById("courses-pane");
+  const letterPdfPane = document.getElementById("letter-pdf-pane");
+  const lettersPane = document.getElementById("letters-pane");
+  const tabs = {
+    transcript: [document.getElementById("tab-transcript"), document.getElementById("panel-transcript")],
+    letters: [document.getElementById("tab-letters"), document.getElementById("panel-letters")],
+  };
+
+  dialog.querySelector(".close").addEventListener("click", () => dialog.close());
+  // A click on the backdrop lands on the dialog element itself.
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
+  // Unload the PDFs on close so the next student never flashes the last one.
+  dialog.addEventListener("close", () => { pdfPane.replaceChildren(); letterPdfPane.replaceChildren(); });
+
+  // The first letter's PDF loads only when the letters tab is first shown.
+  let showFirstLetter = null;
+
+  function showTab(name) {
+    for (const [key, [tab, panel]] of Object.entries(tabs)) {
+      tab.setAttribute("aria-selected", String(key === name));
+      panel.hidden = key !== name;
+    }
+    if (name === "letters" && showFirstLetter) {
+      showFirstLetter();
+      showFirstLetter = null;
+    }
+  }
+  for (const [key, [tab]] of Object.entries(tabs)) tab.addEventListener("click", () => showTab(key));
+
+  // textContent throughout: course titles and names come from PDFs.
+  function el(tag, text, className) {
+    const node = document.createElement(tag);
+    if (text !== undefined && text !== null) node.textContent = text;
+    if (className) node.className = className;
+    return node;
+  }
+  const fmt = (n, digits) => (n === null || n === undefined ? "–" : Number(n).toFixed(digits));
+
+  // A PDF with its name and an "Open in a new tab" link, as both tabs show it.
+  function showPdf(pane, file, url, label, missing) {
+    if (!url) {
+      pane.replaceChildren(el("div", missing, "error"));
+      return;
+    }
+    const frame = el("iframe");
+    frame.src = url;
+    frame.title = label;
+    const link = el("a", "Open in a new tab");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener";
+    const caption = el("p", null, "hint");
+    caption.style.margin = "0 0 .5rem";
+    caption.append(`${file} · `, link);
+    pane.replaceChildren(caption, frame);
+  }
+
+  function renderPdf(record) {
+    showPdf(pdfPane, record.file, record.pdf_url, `${record.student} — ${record.file}`,
+      `The original PDF (${record.file}) was not found in work-folder or pdf-folder.`);
+  }
+
+  // Letters tab: the selected letter's PDF on the left, every letter and its
+  // (post_rank) rank on the right; click a letter to show it.
+  function renderLetters(record) {
+    const letters = record.letters || [];
+    tabs.letters[0].textContent = `Recommendation letters (${letters.length})`;
+    if (!letters.length) {
+      letterPdfPane.replaceChildren();
+      lettersPane.replaceChildren(el("p", "No recommendation letters for this student.", "panel"));
+      return;
+    }
+    const summary = el("p", null, "hint");
+    summary.style.margin = "0 0 .5rem";
+    summary.textContent = `Recommend letter: ${record.letter_rank || "not ranked yet"}`;
+    // Jev's own rank and confidence come only when config.yaml's run_mode is dev.
+    const dev = letters.some((letter) => "jev_rank" in letter);
+    const tbl = el("table", null, "courses");
+    const head = tbl.createTHead().insertRow();
+    head.append(el("th", "Letter"), el("th", "Rank"));
+    if (dev) head.append(el("th", "Jev rank"), el("th", "Confidence", "num"));
+    const tbody = tbl.createTBody();
+    function select(index) {
+      const letter = letters[index];
+      [...tbody.rows].forEach((row, i) => row.classList.toggle("in-category", i === index));
+      showPdf(letterPdfPane, letter.file, letter.pdf_url, letter.file, "");
+    }
+    letters.forEach((letter, index) => {
+      const row = tbody.insertRow();
+      row.className = "student";
+      row.tabIndex = 0;
+      row.append(el("td", letter.file, "code"), el("td", letter.rank || "not ranked"));
+      if (dev) row.append(el("td", letter.jev_rank || "–"), el("td", fmt(letter.confidence, 2), "num"));
+      row.addEventListener("click", () => select(index));
+      row.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(index); }
+      });
+    });
+    const wrap = el("div", null, "table-wrap scroll");
+    wrap.append(tbl);
+    lettersPane.replaceChildren(summary, wrap);
+    showFirstLetter = () => select(0);
+  }
+
+  function renderCourses(record, category) {
+    if (!category) {
+      coursesPane.replaceChildren(el("p",
+        "No category results yet: build a category to see this transcript's courses.", "panel"));
+      return;
+    }
+    const courses = record.courses || [];
+    if (!courses.length) {
+      coursesPane.replaceChildren(el("p", "No courses were extracted from this transcript.", "panel"));
+      return;
+    }
+    const tbl = el("table", null, "courses");
+    const head = tbl.createTHead().insertRow();
+    for (const [label, cls] of [["Term"], ["Code"], ["Title"], ["Grade"],
+        [record.credit_label || "Credits", "num"], ["Points (4.0)", "num"], [category], ["In GPA"]]) {
+      head.append(el("th", label, cls));
+    }
+    const tbody = tbl.createTBody();
+    let lastTerm = null;
+    for (const c of courses) {
+      const row = tbody.insertRow();
+      if (c.in_category) row.className = "in-category";
+      // Show each term once, at the first course in it.
+      row.append(el("td", c.term === lastTerm ? "" : c.term, "term"));
+      lastTerm = c.term;
+      row.append(el("td", c.code, "code"), el("td", c.title), el("td", c.grade),
+        el("td", fmt(c.credits, 1), "num"), el("td", fmt(c.grade_points_4pt, 2), "num"),
+        el("td", c.in_category ? "✓" : ""), el("td", c.counts_toward_gpa ? "✓" : "no"));
+    }
+    const wrap = el("div", null, "table-wrap scroll");
+    wrap.append(tbl);
+    coursesPane.replaceChildren(wrap);
+  }
+
+  return async function openStudent(file, { builder = "", category = "", title: label = "" } = {}) {
+    title.textContent = label;
+    meta.textContent = "";
+    pdfPane.replaceChildren(el("p", "Loading…", "hint"));
+    coursesPane.replaceChildren();
+    letterPdfPane.replaceChildren();
+    lettersPane.replaceChildren();
+    showFirstLetter = null;
+    tabs.letters[0].textContent = "Recommendation letters";
+    showTab("transcript");
+    dialog.showModal();
+    try {
+      const query = new URLSearchParams({ file });
+      if (category) { query.set("builder", builder); query.set("category", category); }
+      const response = await fetch(`/view/student?${query}`);
+      const data = await response.json().catch(() => ({ error: `server returned ${response.status}` }));
+      if (!response.ok) throw new Error(data.error || `server returned ${response.status}`);
+
+      title.textContent = data.student;
+      meta.textContent = [
+        data.institution, data.program,
+        category && `${category} GPA ${fmt(data.gpa_capped, 3)}`,
+        category && `all courses ${fmt(data.overall_gpa_capped, 3)}`,
+        category && `${data.category_courses} of ${data.total_courses} courses in ${category}`,
+        `recommend letter ${data.letter_rank || "–"}`,
+      ].filter(Boolean).join(" · ");
+      renderPdf(data);
+      renderCourses(data, category);
+      renderLetters(data);
+    } catch (err) {
+      pdfPane.replaceChildren();
+      coursesPane.replaceChildren(el("div", `Error: ${err.message}`, "error"));
+    }
+  };
+})();
+</script>

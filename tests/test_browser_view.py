@@ -34,6 +34,7 @@ def folders(tmp_path):
     config = tmp_path / "config.yaml"
     config.write_text(f"# my settings\npdf-folder: {pdfs}\nout-folder: {tmp_path / 'out'}\n"
                       f"work-folder: {tmp_path / 'work'}\nmin-category-courses: 3\n"
+                      f"letters-folder: {tmp_path / 'letters'}\n"
                       "category-definitions:\n  STEM: Science and maths.\n"
                       "log-folder: /nowhere  # keep me\n")
     return built, config
@@ -45,7 +46,7 @@ def client(folders):
 
 
 def courses_for(client, name, category="STEM", builder="llm"):
-    return client.get("/view/courses",
+    return client.get("/view/student",
                       query_string={"builder": builder, "category": category, "file": name})
 
 
@@ -55,9 +56,9 @@ def test_two_tabs_opening_on_upload(client):
     upload = client.get("/").get_data(as_text=True)
     view = client.get("/view").get_data(as_text=True)
     for body in (upload, view):
-        assert 'href="/"' in body and 'href="/view"' in body
-    assert '<a href="/" class="active"' in upload
-    assert '<a href="/view" class="active"' in view
+        assert '<span class="group">Transcripts</span>' in body and 'href="/view"' in body
+        assert 'href="/"' not in body
+    assert 'class="sub active" aria-current="page">View' in view
 
 
 def test_upload_page_has_the_form_and_category_panel(client, tmp_path):
@@ -68,6 +69,24 @@ def test_upload_page_has_the_form_and_category_panel(client, tmp_path):
     order = [body.index(x) for x in ('id="category-select"', 'id="category-update"',
                                      'id="category-add"')]
     assert order == sorted(order)
+
+
+def test_transcripts_sub_items_show_one_panel_each(client):
+    both = client.get("/").get_data(as_text=True)
+    assert 'href="/transcripts/ftp-upload"' in both and 'href="/transcripts/category-build"' in both
+    assert 'class="split single"' not in both and "hidden>" not in both.split('<div class="split')[1][:400]
+
+    ftp = client.get("/transcripts/ftp-upload").get_data(as_text=True)
+    assert 'class="sub active" aria-current="page">FTP Upload' in ftp
+    assert 'aria-labelledby="category-heading" hidden' in ftp
+    assert 'aria-labelledby="upload-heading" hidden' not in ftp
+
+    build = client.get("/transcripts/category-build").get_data(as_text=True)
+    assert 'class="sub active" aria-current="page">Category Build' in build
+    assert 'aria-labelledby="upload-heading" hidden' in build
+    assert 'aria-labelledby="category-heading" hidden' not in build
+
+    assert client.get("/transcripts/other").status_code == 404
 
 
 def test_favicon_is_empty(client):
@@ -92,6 +111,22 @@ def test_view_shows_every_student_with_a_min_courses_filter(client, folders):
     assert 'id="min-courses"' in body and 'value="3"' in body
     assert '<option value="llm" selected>' in body
     assert "Held back" not in body
+
+
+def test_view_shows_each_students_recommend_letter_rank(client, tmp_path):
+    from letter_builder import rank_letters
+
+    letters = tmp_path / "letters"
+    letters.mkdir()
+    for name in ("ann_letter1.pdf", "ann_letter2.pdf"):
+        (letters / name).write_bytes(b"%PDF")
+    rank_letters.write_ranks(letters / "letter_ranks.csv", [("ann_letter1.txt", "excellent", 0.9),
+                                                            ("ann_letter2.txt", "good", 0.8)])
+    body = client.get("/view").get_data(as_text=True)
+    assert ">Recommend letter</button>" in body
+    ann, bob = body.split('data-file="ann.pdf"')[1], body.split('data-file="bob.pdf"')[1]
+    assert '<td data-sort="4">excellent</td>' in ann.split("</tr>")[0]
+    assert '<td data-sort="">–</td>' in bob.split("</tr>")[0]  # no letters
 
 
 def test_view_picks_the_requested_category(client, folders):
@@ -124,6 +159,27 @@ def test_courses_come_from_the_courses_csv(client, folders):
     assert [(c["code"], c["in_category"], c["credits"]) for c in data["courses"]] == [
         ("PHYS 101", True, 4.0), ("ENGL 101", False, 3.0)]
     assert client.get(data["pdf_url"]).data == b"%PDF-1.4 ann"
+
+
+def test_student_detail_lists_the_students_letters_with_post_ranks(client, tmp_path):
+    from letter_builder import rank_letters
+
+    letters = tmp_path / "letters"
+    letters.mkdir()
+    for name in ("ann_letter1.pdf", "ann_letter2.pdf", "bob_letter1.pdf"):
+        (letters / name).write_bytes(b"%PDF")
+    rank_letters.write_ranks(letters / "letter_ranks.csv", [("ann_letter1.txt", "excellent", 0.5),
+                                                            ("ann_letter2.txt", "good", 0.9)])
+    data = courses_for(client, "ann.pdf").get_json()
+    assert data["letter_rank"] == "very good"  # excellent at 0.5 is post-ranked good
+    assert data["letters"] == [
+        {"file": "ann_letter1.pdf", "rank": "good", "pdf_url": "/letters/pdf?file=ann_letter1.pdf"},
+        {"file": "ann_letter2.pdf", "rank": "good", "pdf_url": "/letters/pdf?file=ann_letter2.pdf"}]
+    assert client.get(data["letters"][0]["pdf_url"]).status_code == 200
+    bob = courses_for(client, "bob.pdf").get_json()
+    assert bob["letters"] == [{"file": "bob_letter1.pdf", "rank": None,
+                               "pdf_url": "/letters/pdf?file=bob_letter1.pdf"}]
+    assert bob["letter_rank"] is None
 
 
 def test_a_student_without_a_pdf_still_has_courses(client, folders):

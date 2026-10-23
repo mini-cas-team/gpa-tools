@@ -7,9 +7,11 @@ pdf-folder: /home/personal/Templates/transcripts
 work-folder: /home/personal/Templates/work # .txt/.common.json; builders keep their files in <work-folder>/<builder>/
 out-folder: /home/personal/Templates/out # published <cat>_gpa.csv, for other applications
 log-folder: /home/personal/Templates/log
+letters-folder: /home/personal/Templates/letters # recommendation letter PDFs, their .txt and letter_ranks.csv
 
 # --- optional settings (defaults shown) -------------------------------------
 min-category-courses: 4 # View tab: hide students with fewer category courses
+run_mode: dev # dev: the student dialog's letters tab also shows Jev's own rank and confidence; anything else hides them
 
 # --- category builders --------------------------------------------------------
 # python -m category_builder --category STEM [--builder llm] [--publish]

@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block title %}Transcripts and Recommendation Letters — letters upload{% endblock %}
+
+{% block body %}
+<section aria-labelledby="letters-heading" class="help">
+<h2 id="letters-heading" style="margin-top:0">Upload</h2>
+<form id="letters-form" method="post" action="/letters/upload" enctype="multipart/form-data">
+  <fieldset>
+    <legend>Recommendation letters</legend>
+    <label for="letter-pdfs">Upload letters</label>
+    <input type="file" id="letter-pdfs" name="pdfs" accept="application/pdf,.pdf" multiple>
+    <p class="hint">Leave empty to take every PDF already in <code>{{ folder }}</code>,
+      the <code>letters-folder</code> in config.yaml. A letter that already has a
+      <code>&lt;name&gt;.txt</code> there was uploaded before and is skipped.</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Output</legend>
+    <p class="hint" style="margin-top:0">New PDFs are saved in <code>{{ folder }}</code>.
+      Each becomes <code>&lt;name&gt;.txt</code>
+      (<code>pdftotext -layout</code>), and Jev ranks it as an excellent, good or normal
+      letter, about a second per letter. The ranks are added to
+      <code>{{ folder }}/letter_ranks.csv</code>, which the View page shows.</p>
+  </fieldset>
+
+  <button type="submit">Upload</button>
+</form>
+
+<div id="letters-progress" class="progress" hidden>
+  <progress id="letters-progress-bar"></progress>
+</div>
+<div id="letters-status" class="status" role="status" aria-live="polite" hidden></div>
+</section>
+
+<script>
+(() => {
+  const form = document.getElementById("letters-form");
+  const button = form.querySelector("button[type=submit]");
+  const status = document.getElementById("letters-status");
+  const progress = document.getElementById("letters-progress");
+  const bar = document.getElementById("letters-progress-bar");
+  let poller = null;
+
+  // textContent throughout: messages carry file names and paths.
+  function show(kind, title, lines = [], link = null) {
+    const box = document.createElement("div");
+    box.className = kind;
+    const head = document.createElement("strong");
+    head.textContent = title;
+    box.append(head);
+    if (link) {
+      const a = document.createElement("a");
+      a.href = link.href;
+      a.textContent = link.text;
+      box.append(" ", a);
+    }
+    if (lines.length) {
+      const list = document.createElement("ul");
+      list.className = "notes";
+      for (const line of lines) {
+        const item = document.createElement("li");
+        item.textContent = line;
+        list.append(item);
+      }
+      box.append(list);
+    }
+    status.replaceChildren(box);
+    status.hidden = false;
+  }
+
+  function render(state) {
+    const running = state.status === "running";
+    button.disabled = running;
+    progress.hidden = !running;
+    if (running) {
+      bar.max = state.total || 1;
+      bar.value = state.done || 0;
+      show("running", `Ranking… ${state.done} of ${state.total} letters, ${state.elapsed}s`);
+      return;
+    }
+    clearInterval(poller);
+    poller = null;
+    const failures = (state.failures || []).map(f => `${f.file}: ${f.error}`);
+    const skipped = (state.skipped || []).map(name => `${name}: already uploaded, skipped`);
+    if (state.status === "skipped") {
+      show("ok", `Nothing new: all ${skipped.length} letter(s) were uploaded before.`, skipped,
+        { href: "/letters/view", text: "View ranks" });
+    } else if (state.status === "done") {
+      show(failures.length ? "error" : "ok",
+        `Ranked ${state.ranked} of ${state.total} new letters in ${state.elapsed}s` +
+        (failures.length ? `; ${failures.length} failed` : "") +
+        (skipped.length ? `; ${skipped.length} skipped.` : "."),
+        [...failures, ...skipped], { href: "/letters/view", text: "View ranks" });
+    } else if (state.status === "error") {
+      show("error", `Error: ${state.error}`, failures);
+    }
+  }
+
+  async function poll() {
+    try {
+      const response = await fetch("/letters/status");
+      render(await response.json());
+    } catch (err) {
+      clearInterval(poller);
+      poller = null;
+      button.disabled = false;
+      show("error", `Error: ${err.message}`);
+    }
+  }
+  function follow() { if (!poller) poller = setInterval(poll, 1000); }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    button.disabled = true;
+    show("running", "Uploading…");
+    try {
+      const response = await fetch(form.action, { method: "POST", body: new FormData(form) });
+      const data = await response.json().catch(() => ({ error: `server returned ${response.status}` }));
+      if (!response.ok && data.status !== "running") throw new Error(data.error);
+      render(data);
+      follow();
+    } catch (err) {
+      button.disabled = false;
+      show("error", `Error: ${err.message}`);
+    }
+  });
+
+  // A run started earlier (or in another tab) keeps reporting here.
+  fetch("/letters/status").then(r => r.json()).then(state => {
+    if (state.status === "running") { render(state); follow(); }
+  }).catch(() => {});
+})();
+</script>
+{% endblock %}

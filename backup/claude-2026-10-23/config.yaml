@@ -1,0 +1,63 @@
+# gpa-tools configuration
+#
+# pdf-folder : directory of student transcript PDFs to convert
+
+pdf-folder: /home/personal/Templates/transcripts
+
+work-folder: /home/personal/Templates/work # .txt/.common.json; builders keep their files in <work-folder>/<builder>/
+out-folder: /home/personal/Templates/out # published <cat>_gpa.csv, for other applications
+log-folder: /home/personal/Templates/log
+letters-folder: /home/personal/Templates/letters # recommendation letter PDFs, their .txt and letter_ranks.csv
+
+# --- optional settings (defaults shown) -------------------------------------
+min-category-courses: 4 # View tab: hide students with fewer category courses
+
+# --- category builders --------------------------------------------------------
+# python -m category_builder --category STEM [--builder llm] [--publish]
+# Each reads the *.common.json in work-folder and writes <cat>_gpa.csv and
+# <cat>_courses.csv into <work-folder>/<builder>/. python -m out_builder copies
+# <cat>_gpa.csv to out-folder (the Upload tab does that after each run).
+active-category-builder: jev # the default in the Upload and View tabs
+category-builder:
+  llm: # a local LLM answers yes/no per course; logs to <log-folder>/llm_category.log
+    category-build-model: qwen2.5:3b # yes/no per course; changing it clears the cached answers
+    category-definition-model: qwen2.5:7b # category-definer's ollama step; one call per category, so a bigger model is affordable
+    ollama-url: http://localhost:11434 # any model in `ollama list` there
+  jev: # TypeSafe's Jev scores each course 0-1; logs to <log-folder>/jev_category.log
+    model: jev-1.13.0 # a version pins it; `jev-latest` follows new releases
+    api-url: https://api.typesafe.ai/v1/systemone
+    api-key-env: GPA_TOOLS_KEY # name of the env var holding the key; never put the key here
+    threshold: 0.5 # a course is in the category when Jev's score is above this
+    batch-size: 20 # courses per request
+
+# --- category-definer: drafts a definition for the user to edit -------------------
+# Tries the mode's steps in turn until one gives a definition. chatgpt and gemini
+# are their free web chats, used anonymously (no account, no key) in the installed
+# Chrome or Edge; ollama is category-builder: llm: category-definition-model. Every try is logged to
+# <log-folder>/category_definer.log and shown in the Upload tab.
+category-definer:
+  mode: dev # dev: chatgpt -> gemini -> ollama, in visible browser windows (needs a desktop)
+  #           prod: gemini (headless, no window) -> ollama
+  retries: 1 # extra tries for chatgpt and gemini (ollama is tried once)
+  browser-timeout: 120 # seconds to wait for a site's reply
+  browser: auto # auto (Chrome, else Edge, else Playwright's Chromium), chrome, msedge, chromium
+  # profile-folder: ~/gpa-tools-data/work/browser-profiles # default <work-folder>/browser-profiles
+
+# --- category definitions (all builders) ------------------------------------
+# Shared by every category builder; drafted by category-definer, edit freely.
+# Changing a definition clears the llm builder's cached answers for it.
+# Delete an entry to have category-definer draft a new one.
+category-definitions:
+  MEDICAL: The MEDICAL category includes courses focused on health sciences, including anatomy,
+    physiology, microbiology, pharmacology, and medical genetics. It also encompasses allied
+    health fields such as nursing, physical therapy, and occupational therapy. Subjects like
+    veterinary medicine (which focuses on animals) are not included in this category, as they
+    are categorized under a separate 'ANIMAL SCIENCE' category. Additionally, courses that
+    primarily focus on public health or healthcare policy are typically placed under the broader
+    'SOCIAL SCIENCES' category.
+  STEM: STEM stands for Science, Technology, Engineering, and Mathematics. This category includes
+    subjects such as biology, chemistry, physics, computer science, engineering disciplines
+    like civil, mechanical, and electrical engineering, and mathematics. Subjects like fine
+    arts, literature, philosophy, and humanities are typically not included in the STEM category,
+    as they do not fall under the scientific or technological domains that are central to
+    these fields.

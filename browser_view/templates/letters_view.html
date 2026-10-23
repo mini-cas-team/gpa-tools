@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}Transcripts and Recommendation Letters — letters view{% endblock %}
+
+{% block body %}
+<div class="view-controls">
+  <div>
+    <label for="rank-filter">Group rank</label>
+    <select id="rank-filter">
+      <option value="">All</option>
+      {% for r in group_ranks %}<option value="{{ r }}">{{ r|capitalize }}</option>{% endfor %}
+    </select>
+  </div>
+  <button type="button" class="secondary" onclick="location.reload()"
+          title="Read the letters folder again, e.g. after an upload">Reload</button>
+</div>
+
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+{% if students %}
+  <h2>Recommendation letters</h2>
+  <p class="hint" style="margin-top:-.4rem">
+    One row per student with letters in <code>{{ folder }}</code>. Group rank combines the
+    student's letter ranks (after post_rank): very excellent, all excellent; excellent, at
+    least one excellent and the rest good; very good, all good; good, at least one good;
+    normal, all normal. Click a column name to sort; click a student to open their details.
+    <span id="shown-count"></span>
+  </p>
+  <div class="table-wrap scroll">
+  <table id="letter-students">
+    <thead>
+      <tr>
+        <th><button type="button" class="sort">Student</button></th>
+        <th class="num" data-type="num"><button type="button" class="sort">Letters</button></th>
+        <th data-type="num" aria-sort="descending"><button type="button" class="sort">Group rank</button></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in students %}
+      <tr data-index="{{ loop.index0 }}" data-rank="{{ s.group_rank or '' }}">
+        {# A student without a transcript is in no category's results: letters only. #}
+        <td><a href="#" class="student-link" data-file="{{ s.file }}"
+               data-category="{{ category if s.has_transcript else '' }}">{{ s.student }}</a></td>
+        <td class="num" data-sort="{{ s.letters }}">{{ s.letters }}</td>
+        {# very excellent sorts highest; a student without ranked letters last #}
+        <td data-sort="{{ s.rank_order if s.rank_order is not none else '' }}">
+          {{- s.group_rank or '–' -}}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+{% endif %}
+
+{% include "_student_dialog.html" %}
+{% include "_sort_table.html" %}
+
+<script>
+(() => {
+  const table = document.getElementById("letter-students");
+  if (!table) return;
+  const body = table.tBodies[0];
+
+  // Open sorted by group rank, best first (the header already shows that).
+  const sortBy = sortableTable(table);
+  table.tHead.rows[0].cells[2].removeAttribute("aria-sort");
+  sortBy(2);
+
+  // ---- group rank filter ----------------------------------------------------
+  const filterSelect = document.getElementById("rank-filter");
+  const shown = document.getElementById("shown-count");
+  function filter() {
+    const want = filterSelect.value;
+    let count = 0;
+    for (const row of body.rows) {
+      row.hidden = Boolean(want) && row.dataset.rank !== want;
+      if (!row.hidden) count++;
+    }
+    const total = body.rows.length;
+    shown.textContent = count === total ? `${total} students.` : `Showing ${count} of ${total} students.`;
+  }
+  filterSelect.addEventListener("change", filter);
+  filter();
+
+  // ---- student link: the shared student dialog --------------------------------
+  const builder = {{ builder|tojson }};
+  body.addEventListener("click", (e) => {
+    const link = e.target.closest("a.student-link");
+    if (!link) return;
+    e.preventDefault();
+    openStudent(link.dataset.file, { builder, category: link.dataset.category, title: link.textContent });
+  });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,1997 @@
+diff --git a/README.md b/README.md
+index 1cbe85e..c9e9288 100644
+--- a/README.md
++++ b/README.md
+@@ -63,6 +63,7 @@ pdf-folder: /home/personal/Templates/transcripts   # PDFs to convert
+ work-folder: /home/personal/Templates/work         # .txt, .common.json, uploaded PDFs; <builder>/ folders
+ out-folder: /home/personal/Templates/out           # published <cat>_gpa.csv, for other applications
+ log-folder: /home/personal/Templates/log           # upload, llm_category, jev_category, category_definer, browser_view .log
++letters-folder: /home/personal/Templates/letters   # recommendation letter PDFs, their .txt and letter_ranks.csv
+ min-category-courses: 4      # View tab: hide students with fewer category courses
+ 
+ active-category-builder: jev # the default in the Upload and View tabs and the CLI
+@@ -250,6 +251,11 @@ publishes only with `--publish` or this command.
+ | `--host` / `--port` | bind address, default `127.0.0.1:5001` |
+ | `--debug` | Flask reloader and tracebacks |
+ 
++A left bar lists the pages in two groups. **Transcripts**: *FTP Upload* (the
++Upload panel below), *Category Build* (the Categories panel) and *View*.
++**Recommendations**: *FTP Upload* and *View* for letters. `/` still shows both
++transcript panels side by side.
++
+ **Upload tab.** Two panels, each with its own scroll bar.
+ 
+ - *Left, Upload:* choose PDFs to upload, or leave it empty to convert the whole
+@@ -279,8 +285,42 @@ publishes only with `--publish` or this command.
+ `<work-folder>/<builder>/<cat>_gpa.csv` and shows every student. Click a column
+ name to sort (it opens sorted by category GPA). **Min courses** hides students
+ with fewer category courses (default `min-category-courses`). **Reload**
+-re-reads the folder, e.g. after a command-line run. Click a student to see
+-their courses from `<cat>_courses.csv` next to the transcript PDF.
++re-reads the folder, e.g. after a command-line run. Click a student to open
++their details in two tabs: *Transcript*, their courses from `<cat>_courses.csv`
++next to the transcript PDF, and *Recommendation letters*, each letter with its
++post_rank rank next to the selected letter's PDF.
++**Recommend letter** is the student's group rank from their recommendation
++letters (`letter_builder/students.py`, `student_info`): letters
++`<student>_letter<N>.pdf` in `letters-folder` match transcript `<student>.pdf`,
++and their post_rank ranks combine into very excellent, excellent, very good,
++good or normal; `–` when the student has no ranked letters.
++
++**Recommendations, FTP Upload.** Choose letter PDFs, or leave it empty to take
++every PDF in `letters-folder`. A letter whose `<name>.txt` is already there was
++uploaded before and is skipped (not saved, not ranked again). New ones are
++saved there; then, in the background with a progress bar, each becomes `<name>.txt` and Jev ranks it
++*excellent*, *good* or *normal* (one `choice` question per letter, using the
++`category-builder: jev:` model, URL and key). The ranks are merged into
++`<letters-folder>/letter_ranks.csv` (`filename,rank,confidence`), replacing
++rows for the same file. One run at a time.
++
++**Recommendations, View.** One row per student with letters in
++`letters-folder`: **Student**, the number of **Letters**, and the **Group rank**
++from `student_info` (`letter_builder/students.py`), which combines the
++student's letter ranks after `post_rank.py` (*good* below 0.7 becomes
++*normal*; *excellent* below 0.4 becomes *normal*, and below 0.7 *good*;
++`letter_ranks.csv` keeps Jev's own answers). Best group rank first; filter by
++**Group rank**, sort by column. The student's name links to the same student
++dialog as Transcripts → View, with the transcript's courses from the active
++builder's first category.
++
++The same steps run from the command line:
++
++```bash
++.venv312/bin/python -m letter_builder.pdf2txt        # every PDF in letters-folder -> .txt
++.venv312/bin/python -m letter_builder.rank_letters   # every .txt -> letter_ranks.csv (rewritten)
++.venv312/bin/python -m letter_builder.post_rank      # print the adjusted ranks
++```
+ 
+ **This is a localhost tool for one operator.** It serves files from the
+ configured folders, and Flask's development server is what `--host` binds;
+@@ -311,7 +351,8 @@ jev_category/     the jev builder (python -m jev_category)
+   client.py       TypeSafe API client
+   store.py        score cache
+ out_builder/      publish <cat>_gpa.csv to out-folder (python -m out_builder)
+-browser_view/     Flask UI: Upload and View tabs (python -m browser_view)
++letter_builder/   recommendation letters: pdf2txt, then rank_letters with Jev
++browser_view/     Flask UI: transcript and letter pages (python -m browser_view)
+ install/          per-user installer scripts (used by /install-gpa-tools)
+ tests/
+ ```
+diff --git a/browser_view/app.py b/browser_view/app.py
+index 2597a99..abae6c5 100644
+--- a/browser_view/app.py
++++ b/browser_view/app.py
+@@ -36,6 +36,8 @@ import category_builder
+ from category_builder import definer
+ from category_builder.common import RunError, courses_csv_name
+ from category_builder.definitions import Definitions
++from jev_category.client import JevError
++from letter_builder import RANKS_CSV, letters_folder, pdf2txt, rank_letters, students as letter_students
+ from out_builder import publish
+ from upload.convert import add_tool_folders, pdf_to_common_json
+ 
+@@ -214,16 +216,136 @@ class CategoryJob:
+             self.state.update(update, finished=time.time())
+ 
+ 
++class LetterJob:
++    """The one background run that converts recommendation letters and ranks them.
++
++    Each Jev call takes about a second, so a folder of letters takes minutes;
++    the FTP Upload page polls /letters/status meanwhile.  The ranks are merged
++    into <letters-folder>/letter_ranks.csv when the run ends.
++    """
++
++    def __init__(self):
++        self.lock = threading.Lock()
++        self.state: dict = {"status": "idle"}
++
++    def snapshot(self) -> dict:
++        with self.lock:
++            state = dict(self.state)
++        if state.get("started"):
++            state["elapsed"] = round((state.get("finished") or time.time()) - state["started"])
++        return state
++
++    def start(self, client, pdfs: list[Path], ranks_csv: Path, skipped: list[str] = ()) -> bool:
++        with self.lock:
++            if self.state.get("status") == "running":
++                return False
++            self.state = {"status": "running", "done": 0, "total": len(pdfs),
++                          "skipped": list(skipped), "started": time.time()}
++        threading.Thread(target=self._run, args=(client, pdfs, ranks_csv), daemon=True).start()
++        return True
++
++    def _run(self, client, pdfs: list[Path], ranks_csv: Path) -> None:
++        ranks, failures = [], []
++        try:
++            for pdf in pdfs:
++                try:
++                    txt = pdf2txt.convert_one(pdf)
++                    choice, confidence = rank_letters.rank(client, txt.read_text(encoding="utf-8"))
++                except (RuntimeError, JevError, OSError) as exc:
++                    failures.append({"file": pdf.name, "error": str(exc)})
++                    log.error("letter %s: %s", pdf.name, exc)
++                else:
++                    ranks.append((txt.name, choice, confidence))
++                with self.lock:
++                    self.state["done"] += 1
++            if ranks:
++                rank_letters.merge_ranks(ranks_csv, ranks)
++        except Exception as exc:  # shown on the page; the thread must not die silently
++            log.exception("letter ranking failed")
++            update = {"status": "error", "error": str(exc)}
++        else:
++            log.info("letters: ranked %d of %d into %s", len(ranks), len(pdfs), ranks_csv)
++            update = {"status": "done" if ranks else "error", "ranked": len(ranks),
++                      "error": None if ranks else "no letter could be ranked"}
++        with self.lock:
++            self.state.update(update, failures=failures, csv=str(ranks_csv), finished=time.time())
++
++
++def _student_name(file: str) -> str:
++    """adam_flores.pdf -> Adam Flores."""
++    return Path(file).stem.replace("_", " ").title()
++
++
++def _transcript_names(cfg: dict) -> list[str]:
++    """Every transcript PDF's name, from work-folder and pdf-folder (as _find_pdf looks)."""
++    names = set()
++    for key in ("work-folder", "pdf-folder"):
++        if cfg.get(key):
++            names.update(p.name for p in Path(cfg[key]).expanduser().glob("*.pdf"))
++    return sorted(names)
++
++
++def _letter_students(cfg: dict, names: dict[str, str] | None = None) -> list[dict]:
++    """Recommendations → View rows: one per student with letters, from student_info.
++
++    ``names`` maps a transcript file to the student's name from category results;
++    a student not in it is named after their file."""
++    names = names or {}
++    folder = letters_folder(cfg)
++    records = letter_students.student_info(_transcript_names(cfg), sorted(folder.glob("*.pdf")),
++                                           letter_students.letter_ranks(folder))
++    return [{"student": names.get(r["transcript"]) or _student_name(r["student"]),
++             "file": r["transcript"] or f"{r['student']}.pdf",
++             "has_transcript": r["transcript"] is not None,
++             "letters": len(r["letters"]), "group_rank": r["group_rank"]}
++            for r in records if r["letters"]]
++
++
++def _add_letter_ranks(students: list[dict], folder: Path) -> None:
++    """Set each student's ``letter_rank``: student_info's group_rank of their
++    recommendation letters (matched by file name), else None."""
++    try:
++        letters = sorted(folder.glob("*.pdf"))
++        ranks = letter_students.letter_ranks(folder)
++    except (OSError, ValueError, KeyError, csv.Error) as exc:
++        log.error("letter ranks from %s: %s", folder, exc)
++        letters, ranks = [], {}
++    records = letter_students.student_info([s["file"] for s in students if s["file"]], letters, ranks)
++    by_transcript = {r["transcript"]: r["group_rank"] for r in records if r["transcript"]}
++    for s in students:
++        s["letter_rank"] = by_transcript.get(s["file"])
++
++
++def _student_letters(transcript: str, folder: Path) -> dict:
++    """{"letters": [{file, rank, pdf_url}], "letter_rank": group rank} for one
++    student, from student_info on their transcript's name."""
++    try:
++        letters = sorted(folder.glob("*.pdf"))
++        ranks = letter_students.letter_ranks(folder)
++    except (OSError, ValueError, KeyError, csv.Error) as exc:
++        log.error("letters for %s from %s: %s", transcript, folder, exc)
++        letters, ranks = [], {}
++    record = letter_students.student_info([transcript], letters, ranks)
++    record = next((r for r in record if r["transcript"] == transcript), None)
++    if record is None:
++        return {"letters": [], "letter_rank": None}
++    return {"letter_rank": record["group_rank"],
++            "letters": [{**letter, "pdf_url": f"/letters/pdf?{urlencode({'file': letter['file']})}"}
++                        for letter in record["letters"]]}
++
++
+ def create_app(config_path: Path | None = None) -> Flask:
+     app = Flask(__name__)
+     app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
+     config_path = Path(config_path or PROJECT_ROOT / "config.yaml")
+     add_tool_folders(_load_config(config_path).get("tool-folders"))
+ 
+-    @app.get("/")
+-    def upload():
++    # The Transcripts page shows both panels; each sub-item shows one of them.
++    @app.get("/", defaults={"panel": None})
++    @app.get("/transcripts/<any('ftp-upload', 'category-build'):panel>")
++    def upload(panel):
+         cfg = _load_config(config_path)
+-        return render_template("upload.html", tab="upload",
++        return render_template("upload.html", tab=panel or "upload", panel=panel,
+                                pdf_folder=cfg.get("pdf-folder") or "",
+                                work_folder=cfg.get("work-folder") or "")
+ 
+@@ -406,6 +528,8 @@ def create_app(config_path: Path | None = None) -> Flask:
+                 students = _read_students(available[selected], selected)
+             except (OSError, ValueError, csv.Error) as exc:
+                 error = f"could not read {available[selected].name}: {exc}"
++            else:
++                _add_letter_ranks(students, letters_folder(cfg))
+         else:
+             error = f"the {builder} builder has no results (*_gpa.csv) in {folder} yet"
+ 
+@@ -418,14 +542,28 @@ def create_app(config_path: Path | None = None) -> Flask:
+             categories=list(available),
+             selected=selected,
+             students=students,
++            group_ranks=letter_students.GROUP_RANKS,
+             min_courses=int(cfg.get("min-category-courses") or 0),
+             error=error,
+         )
+ 
+-    @app.get("/view/courses")
+-    def view_courses():
+-        """One student's courses, for the View tab's dialog."""
++    @app.get("/view/student")
++    def student_detail():
++        """One student's details for the student dialog: the transcript's courses
++        (when a category is given), and the recommendation letters with their
++        post_rank ranks."""
+         cfg = _load_config(config_path)
++        if not request.args.get("category"):
++            # Recommendations → View without category results: PDF and letters only.
++            name = _bare_pdf_name(request.args.get("file"))
++            if not name:
++                return jsonify(error="that student is not known"), 404
++            pdf = _find_pdf(name, cfg)
++            return jsonify({
++                "student": _student_name(name), "file": name, "courses": None,
++                "pdf_url": f"/view/pdf?{urlencode({'file': name})}" if pdf else None,
++                **_student_letters(name, letters_folder(cfg)),
++            })
+         try:
+             builder, folder = _builder_folder(cfg, request.args.get("builder"))
+         except (category_builder.UnknownBuilder, KeyError) as exc:
+@@ -455,6 +593,7 @@ def create_app(config_path: Path | None = None) -> Flask:
+             "courses": courses,
+             "credit_label": "Credits",
+             "pdf_url": f"/view/pdf?{urlencode({'file': name})}" if pdf else None,
++            **_student_letters(name, letters_folder(cfg)),
+         })
+ 
+     @app.get("/view/pdf")
+@@ -466,6 +605,93 @@ def create_app(config_path: Path | None = None) -> Flask:
+         # Inline, so the browser's own PDF viewer shows it inside the dialog.
+         return send_file(pdf, mimetype="application/pdf")
+ 
++    letter_job = LetterJob()
++
++    @app.get("/letters/ftp-upload")
++    def letters_upload():
++        folder = letters_folder(_load_config(config_path))
++        return render_template("letters_upload.html", tab="letters-upload", folder=folder)
++
++    @app.post("/letters/upload")
++    def run_letters_upload():
++        """Save the uploaded letters (else take every PDF in letters-folder), then
++        convert and rank them in the background; /letters/status reports progress."""
++        cfg = _load_config(config_path)
++        folder = letters_folder(cfg)
++        try:
++            client = rank_letters.jev_client(cfg)
++            folder.mkdir(parents=True, exist_ok=True)
++            # A letter with a <name>.txt was uploaded before: it is skipped, not replaced.
++            done = {p.stem for p in folder.glob("*.txt")}
++            uploads = [f for f in request.files.getlist("pdfs") if f and f.filename]
++            if uploads:
++                names = [Path(u.filename).name for u in uploads]  # never trust a client path
++                bad = [n for n in names if not n.lower().endswith(".pdf")]
++                if bad:
++                    raise ValueError(f"not a PDF: {bad[0]}")
++                if letter_job.snapshot().get("status") == "running":
++                    return jsonify(error="letters are already being ranked",
++                                   **letter_job.snapshot()), 409
++                new = {}
++                for upload, name in zip(uploads, names):
++                    if Path(name).stem not in done:
++                        new[name] = upload
++                for name, upload in new.items():
++                    upload.save(folder / name)
++                pdfs = sorted(folder / n for n in new)
++                skipped = sorted(set(names) - set(new))
++            else:
++                found = sorted(p for p in folder.glob("*.pdf") if p.is_file())
++                if not found:
++                    raise ValueError(f"no PDFs found in {folder}")
++                pdfs = [p for p in found if p.stem not in done]
++                skipped = [p.name for p in found if p.stem in done]
++        except (JevError, OSError, ValueError) as exc:
++            return jsonify(error=str(exc)), 400
++        if not pdfs:
++            return jsonify(status="skipped", skipped=skipped)
++        if not letter_job.start(client, pdfs, folder / RANKS_CSV, skipped):
++            return jsonify(error="letters are already being ranked", **letter_job.snapshot()), 409
++        log.info("letters: ranking %d PDF(s) in %s", len(pdfs), folder)
++        return jsonify(letter_job.snapshot())
++
++    @app.get("/letters/status")
++    def letters_status():
++        return jsonify(letter_job.snapshot())
++
++    @app.get("/letters/view")
++    def letters_view():
++        cfg = _load_config(config_path)
++        folder = letters_folder(cfg)
++        # The dialog shows the transcript's courses from the active builder's first
++        # category; its results also give the students' full names.
++        names = {}
++        try:
++            builder, built = _builder_folder(cfg, None)
++            available = _built_categories(built)
++            category = next(iter(available), "")
++            if category:
++                names = {r["file"]: r["student"] for r in _read_students(available[category], category)}
++        except (category_builder.UnknownBuilder, KeyError, OSError, ValueError, csv.Error):
++            builder, category = "", ""
++        try:
++            rows = _letter_students(cfg, names)
++        except (OSError, ValueError, KeyError, csv.Error) as exc:
++            rows, error = [], f"could not read the letters in {folder}: {exc}"
++        else:
++            error = None if rows else f"no recommendation letters in {folder} yet"
++        return render_template("letters_view.html", tab="letters-view", folder=folder,
++                               students=rows, group_ranks=letter_students.GROUP_RANKS,
++                               builder=builder, category=category, error=error)
++
++    @app.get("/letters/pdf")
++    def letters_pdf():
++        name = _bare_pdf_name(request.args.get("file"))
++        pdf = letters_folder(_load_config(config_path)) / name if name else None
++        if pdf is None or not pdf.is_file():
++            abort(404)
++        return send_file(pdf, mimetype="application/pdf")
++
+     @app.get("/favicon.ico")
+     def favicon():
+         return "", 204
+diff --git a/browser_view/templates/base.html b/browser_view/templates/base.html
+index 75a002c..7addd75 100644
+--- a/browser_view/templates/base.html
++++ b/browser_view/templates/base.html
+@@ -1,7 +1,7 @@
+ <!doctype html>
+ <meta charset="utf-8">
+ <meta name="viewport" content="width=device-width, initial-scale=1">
+-<title>{% block title %}Browser View{% endblock %}</title>
++<title>{% block title %}Transcripts and Recommendation Letters{% endblock %}</title>
+ <style>
+   :root {
+     --bg: #ffffff; --fg: #1a1c1e; --muted: #5c6269; --line: #d8dce0;
+@@ -15,16 +15,15 @@
+   }
+   * { box-sizing: border-box; }
+   body {
+-    margin: 0; padding: 0 1rem 2rem; background: var(--bg); color: var(--fg);
++    margin: 0; background: var(--bg); color: var(--fg);
+     font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+   }
+   main { max-width: 68rem; margin: 0 auto; }
+   h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+   h2 { font-size: 1.1rem; margin: 2rem 0 .6rem; }
+   h3 { font-size: .95rem; margin: 1.4rem 0 .4rem; }
+-  p.sub { color: var(--muted); margin: 0 0 1.5rem; }
+   a { color: var(--accent); }
+-  fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 1rem 1.1rem; margin: 0 0 1.1rem; }
++  fieldset { min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 1rem 1.1rem; margin: 0 0 1.1rem; }
+   legend { padding: 0 .4rem; font-weight: 600; font-size: .9rem; }
+   label { display: block; margin: .55rem 0 .2rem; font-size: .88rem; color: var(--muted); }
+   input[type=text], input[type=number], input[type=file], select {
+@@ -60,13 +59,22 @@
+     position: sticky; top: 0; z-index: 10; background: var(--bg);
+     padding-top: 2rem; margin: 0 0 1.5rem;
+   }
+-  nav.tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--line); }
+-  nav.tabs a {
+-    padding: .55rem 1.1rem; color: var(--muted); text-decoration: none; font-weight: 600;
+-    border-bottom: 2px solid transparent; margin-bottom: -1px;
+-  }
+-  nav.tabs a:hover { color: var(--fg); }
+-  nav.tabs a.active { color: var(--accent); border-bottom-color: var(--accent); }
++  /* Left bar: the page list, pinned while the page scrolls. */
++  .layout { display: flex; min-height: 100vh; }
++  nav.side {
++    position: sticky; top: 0; align-self: flex-start; flex: 0 0 11rem; height: 100vh;
++    display: flex; flex-direction: column; gap: .2rem; padding: 2rem .6rem 1rem;
++    background: var(--panel); border-right: 1px solid var(--line);
++  }
++  nav.side a {
++    padding: .5rem .8rem; border-radius: 6px; color: var(--muted); text-decoration: none; font-weight: 600;
++  }
++  nav.side a.sub + .group { margin-top: .8rem; }
++  nav.side .group { padding: .5rem .8rem; color: var(--fg); font-weight: 600; }
++  nav.side a.sub { margin-left: .9rem; padding: .35rem .8rem; font-size: .88rem; font-weight: 500; }
++  nav.side a:hover { color: var(--fg); background: var(--bg); }
++  nav.side a.active { color: var(--accent); background: var(--bg); box-shadow: inset 3px 0 var(--accent); }
++  .layout > main { flex: 1; min-width: 0; padding: 0 1rem 2rem; }
+   button:disabled { opacity: .6; cursor: progress; }
+   .status { margin: 1.4rem 0 0; }
+   .status .ok { border-left: 3px solid #1a7f37; }
+@@ -122,6 +130,15 @@
+   .dialog-body {
+     flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+   }
++  .dialog-body[hidden] { display: none; }
++  /* The student dialog's Transcript / Recommendation letters tabs. */
++  .dialog-tabs { display: flex; gap: .25rem; padding: 0 1.2rem; border-bottom: 1px solid var(--line); }
++  .dialog-tabs button {
++    background: none; color: var(--muted); border-radius: 0; padding: .55rem 1rem;
++    border-bottom: 2px solid transparent; margin-bottom: -1px;
++  }
++  .dialog-tabs button:hover { color: var(--fg); }
++  .dialog-tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+   .dialog-body > section { min-height: 0; display: flex; flex-direction: column; padding: .8rem 1.2rem 1.2rem; }
+   .dialog-body > section + section { border-left: 1px solid var(--line); }
+   .pdf-pane iframe { flex: 1; width: 100%; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+@@ -139,14 +156,17 @@
+   }
+   /* Upload tab: upload form on the left, categories on the right. */
+   .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
++  .split.single { grid-template-columns: minmax(0, 1fr); }
+   .split > section > h2:first-child { margin-top: 0; }
++  .split h2 a { color: inherit; text-decoration: none; }
++  .split h2 a:hover { color: var(--accent); }
+   /* Each panel scrolls on its own; --split-top is measured in upload.html. */
+   .split > section {
+     height: calc(100vh - var(--split-top, 10rem) - 2rem); overflow-y: auto;
+     overscroll-behavior: contain; padding-right: .4rem;
+   }
+-  .category-bar { display: flex; gap: .5rem; align-items: center; }
+-  .category-bar select { flex: 1; width: auto; }
++  .category-bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
++  .category-bar select { flex: 1 1 4rem; width: auto; min-width: 0; }
+   .category-bar select.builder { flex: 0 0 auto; }
+   .category-bar label { margin: 0; color: var(--fg); font-weight: 600; }
+   .category-bar label + button { margin-left: auto; }
+@@ -166,16 +186,31 @@
+     .split { grid-template-columns: 1fr; }
+     .split > section { height: auto; overflow: visible; padding-right: 0; }
+   }
+-  @media (max-width: 640px) { header.top { padding-top: 1.2rem; } }
++  @media (max-width: 640px) {
++    header.top { padding-top: 1.2rem; }
++    .layout { display: block; }
++    nav.side {
++      position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; padding: .5rem 1rem;
++      border-right: 0; border-bottom: 1px solid var(--line);
++    }
++    nav.side a.sub { margin-left: 0; }
++    nav.side a.sub + .group { margin-top: 0; margin-left: .6rem; }
++  }
+ </style>
+-<main>
+-  <header class="top">
+-    <h1>Browser View</h1>
+-    <p class="sub">Browse category rankings written by llm_category.</p>
+-    <nav class="tabs">
+-      <a href="/" {% if tab == "upload" %}class="active" aria-current="page"{% endif %}>Upload</a>
+-      <a href="/view" {% if tab == "view" %}class="active" aria-current="page"{% endif %}>View</a>
+-    </nav>
+-  </header>
+-  {% block body %}{% endblock %}
+-</main>
++<div class="layout">
++  <nav class="side" aria-label="Pages">
++    <span class="group">Transcripts</span>
++    <a href="/transcripts/ftp-upload" class="sub{% if tab == "ftp-upload" %} active" aria-current="page{% endif %}">FTP Upload</a>
++    <a href="/transcripts/category-build" class="sub{% if tab == "category-build" %} active" aria-current="page{% endif %}">Category Build</a>
++    <a href="/view" class="sub{% if tab == "view" %} active" aria-current="page{% endif %}">View</a>
++    <span class="group">Recommendations</span>
++    <a href="/letters/ftp-upload" class="sub{% if tab == "letters-upload" %} active" aria-current="page{% endif %}">FTP Upload</a>
++    <a href="/letters/view" class="sub{% if tab == "letters-view" %} active" aria-current="page{% endif %}">View</a>
++  </nav>
++  <main>
++    <header class="top">
++      <h1>Transcripts and Recommendation Letters</h1>
++    </header>
++    {% block body %}{% endblock %}
++  </main>
++</div>
+diff --git a/browser_view/templates/upload.html b/browser_view/templates/upload.html
+index c991520..8d4fa40 100644
+--- a/browser_view/templates/upload.html
++++ b/browser_view/templates/upload.html
+@@ -1,11 +1,12 @@
+ {% extends "base.html" %}
+ 
+-{% block title %}Browser View — upload{% endblock %}
++{% block title %}Transcripts and Recommendation Letters — upload{% endblock %}
+ 
+ {% block body %}
+-<div class="split">
+-<section aria-labelledby="upload-heading">
+-<h2 id="upload-heading">Upload</h2>
++{# panel: none shows both panels; ftp-upload or category-build shows just that one. #}
++<div class="split{% if panel %} single{% endif %}">
++<section aria-labelledby="upload-heading" {% if panel == "category-build" %}hidden{% endif %}>
++<h2 id="upload-heading">{% if panel %}Upload{% else %}<a href="/transcripts/ftp-upload">Upload</a>{% endif %}</h2>
+ <form id="upload-form" method="post" action="/upload" enctype="multipart/form-data">
+   <fieldset>
+     <legend>PDF input</legend>
+@@ -30,8 +31,8 @@
+ <div id="status" class="status" role="status" aria-live="polite" hidden></div>
+ </section>
+ 
+-<section aria-labelledby="category-heading">
+-<h2 id="category-heading">Categories</h2>
++<section aria-labelledby="category-heading" {% if panel == "ftp-upload" %}hidden{% endif %}>
++<h2 id="category-heading">{% if panel %}Categories{% else %}<a href="/transcripts/category-build">Categories</a>{% endif %}</h2>
+ <fieldset>
+   <legend>Category definitions</legend>
+   <div class="category-bar">
+diff --git a/browser_view/templates/view.html b/browser_view/templates/view.html
+index 39d5f5c..e73bc66 100644
+--- a/browser_view/templates/view.html
++++ b/browser_view/templates/view.html
+@@ -1,6 +1,6 @@
+ {% extends "base.html" %}
+ 
+-{% block title %}Browser View — view{% endblock %}
++{% block title %}Transcripts and Recommendation Letters — view{% endblock %}
+ 
+ {% block body %}
+ <form id="view-form" method="get" action="/view" class="view-controls">
+@@ -58,6 +58,7 @@
+         <th class="num" data-type="num"><button type="button" class="sort">{{ selected }} courses</button></th>
+         <th class="num" data-type="num"><button type="button" class="sort">Total courses</button></th>
+         <th class="num" data-type="num"><button type="button" class="sort">%</button></th>
++        <th data-type="num"><button type="button" class="sort">Recommend letter</button></th>
+       </tr>
+     </thead>
+     <tbody>
+@@ -73,6 +74,9 @@
+         {{ num(r.category_courses, 0) }}
+         {{ num(r.total_courses, 0) }}
+         {{ num(r.category_course_pct, 1) }}
++        {# very excellent sorts highest; a student without ranked letters last #}
++        <td data-sort="{{ group_ranks|length - group_ranks.index(r.letter_rank) if r.letter_rank in group_ranks else '' }}">
++          {{- r.letter_rank or '–' -}}</td>
+       </tr>
+       {% endfor %}
+     </tbody>
+@@ -84,19 +88,7 @@
+   {% endif %}
+ {% endif %}
+ 
+-<dialog id="courses-dialog" aria-labelledby="courses-title">
+-  <div class="dialog-head">
+-    <div>
+-      <h2 id="courses-title"></h2>
+-      <p class="hint" id="courses-meta"></p>
+-    </div>
+-    <button type="button" class="close" aria-label="Close">×</button>
+-  </div>
+-  <div class="dialog-body">
+-    <section class="pdf-pane" id="pdf-pane" aria-label="Original transcript"></section>
+-    <section class="courses-pane" id="courses-pane" aria-label="Extracted courses"></section>
+-  </div>
+-</dialog>
++{% include "_student_dialog.html" %}
+ 
+ <script>
+ (() => {
+@@ -179,105 +171,13 @@
+   });
+   rowsBody.addEventListener("mouseleave", () => { tip.hidden = true; });
+ 
+-  // ---- student dialog -----------------------------------------------------
+-  const dialog = document.getElementById("courses-dialog");
+-  const title = document.getElementById("courses-title");
+-  const meta = document.getElementById("courses-meta");
+-  const pdfPane = document.getElementById("pdf-pane");
+-  const coursesPane = document.getElementById("courses-pane");
+   const builder = {{ builder|tojson }};
+   const category = {{ selected|tojson }};
+   filter();
+ 
+-  dialog.querySelector(".close").addEventListener("click", () => dialog.close());
+-  // A click on the backdrop lands on the dialog element itself.
+-  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
+-  // Unload the PDF on close so the next student never flashes the last one.
+-  dialog.addEventListener("close", () => pdfPane.replaceChildren());
+-
+-  // textContent throughout: course titles and names come from PDFs.
+-  function el(tag, text, className) {
+-    const node = document.createElement(tag);
+-    if (text !== undefined && text !== null) node.textContent = text;
+-    if (className) node.className = className;
+-    return node;
+-  }
+-  const fmt = (n, digits) => (n === null || n === undefined ? "–" : Number(n).toFixed(digits));
+-
+-  function renderPdf(record) {
+-    if (!record.pdf_url) {
+-      pdfPane.replaceChildren(el("div",
+-        `The original PDF (${record.file}) was not found in work-folder or pdf-folder.`, "error"));
+-      return;
+-    }
+-    const frame = el("iframe");
+-    frame.src = record.pdf_url;
+-    frame.title = `${record.student} — ${record.file}`;
+-    const link = el("a", "Open in a new tab");
+-    link.href = record.pdf_url;
+-    link.target = "_blank";
+-    link.rel = "noopener";
+-    const caption = el("p", null, "hint");
+-    caption.style.margin = "0 0 .5rem";
+-    caption.append(`${record.file} · `, link);
+-    pdfPane.replaceChildren(caption, frame);
+-  }
+-
+-  function renderCourses(record) {
+-    const courses = record.courses || [];
+-    if (!courses.length) {
+-      coursesPane.replaceChildren(el("p", "No courses were extracted from this transcript.", "panel"));
+-      return;
+-    }
+-    const tbl = el("table", null, "courses");
+-    const head = tbl.createTHead().insertRow();
+-    for (const [label, cls] of [["Term"], ["Code"], ["Title"], ["Grade"],
+-        [record.credit_label || "Credits", "num"], ["Points (4.0)", "num"], [category], ["In GPA"]]) {
+-      head.append(el("th", label, cls));
+-    }
+-    const tbody = tbl.createTBody();
+-    let lastTerm = null;
+-    for (const c of courses) {
+-      const row = tbody.insertRow();
+-      if (c.in_category) row.className = "in-category";
+-      // Show each term once, at the first course in it.
+-      row.append(el("td", c.term === lastTerm ? "" : c.term, "term"));
+-      lastTerm = c.term;
+-      row.append(el("td", c.code, "code"), el("td", c.title), el("td", c.grade),
+-        el("td", fmt(c.credits, 1), "num"), el("td", fmt(c.grade_points_4pt, 2), "num"),
+-        el("td", c.in_category ? "✓" : ""), el("td", c.counts_toward_gpa ? "✓" : "no"));
+-    }
+-    const wrap = el("div", null, "table-wrap scroll");
+-    wrap.append(tbl);
+-    coursesPane.replaceChildren(wrap);
+-  }
+-
+-  async function open(row) {
++  function open(row) {
+     tip.hidden = true;
+-    title.textContent = row.cells[1].textContent;
+-    meta.textContent = "";
+-    pdfPane.replaceChildren(el("p", "Loading…", "hint"));
+-    coursesPane.replaceChildren();
+-    dialog.showModal();
+-    try {
+-      const query = new URLSearchParams({ builder, category, file: row.dataset.file });
+-      const response = await fetch(`/view/courses?${query}`);
+-      const data = await response.json().catch(() => ({ error: `server returned ${response.status}` }));
+-      if (!response.ok) throw new Error(data.error || `server returned ${response.status}`);
+-
+-      title.textContent = data.student;
+-      meta.textContent = [
+-        data.institution, data.program,
+-        `${category} GPA ${fmt(data.gpa_capped, 3)}`,
+-        `all courses ${fmt(data.overall_gpa_capped, 3)}`,
+-        `${data.category_courses} of ${data.total_courses} courses in ${category}`,
+-      ].filter(Boolean).join(" · ");
+-      renderPdf(data);
+-      renderCourses(data);
+-    } catch (err) {
+-      pdfPane.replaceChildren();
+-      coursesPane.replaceChildren(el("div", `Error: ${err.message}`, "error"));
+-    }
++    openStudent(row.dataset.file, { builder, category, title: row.cells[0].textContent });
+   }
+ 
+   table.tBodies[0].addEventListener("click", (e) => {
+diff --git a/config.yaml b/config.yaml
+index 9b9894e..fab3c89 100644
+--- a/config.yaml
++++ b/config.yaml
+@@ -7,6 +7,7 @@ pdf-folder: /home/personal/Templates/transcripts
+ work-folder: /home/personal/Templates/work # .txt/.common.json; builders keep their files in <work-folder>/<builder>/
+ out-folder: /home/personal/Templates/out # published <cat>_gpa.csv, for other applications
+ log-folder: /home/personal/Templates/log
++letters-folder: /home/personal/Templates/letters # recommendation letter PDFs, their .txt and letter_ranks.csv
+ 
+ # --- optional settings (defaults shown) -------------------------------------
+ min-category-courses: 4 # View tab: hide students with fewer category courses
+diff --git a/tests/test_browser_view.py b/tests/test_browser_view.py
+index f43db5f..df4dee5 100644
+--- a/tests/test_browser_view.py
++++ b/tests/test_browser_view.py
+@@ -34,6 +34,7 @@ def folders(tmp_path):
+     config = tmp_path / "config.yaml"
+     config.write_text(f"# my settings\npdf-folder: {pdfs}\nout-folder: {tmp_path / 'out'}\n"
+                       f"work-folder: {tmp_path / 'work'}\nmin-category-courses: 3\n"
++                      f"letters-folder: {tmp_path / 'letters'}\n"
+                       "category-definitions:\n  STEM: Science and maths.\n"
+                       "log-folder: /nowhere  # keep me\n")
+     return built, config
+@@ -45,7 +46,7 @@ def client(folders):
+ 
+ 
+ def courses_for(client, name, category="STEM", builder="llm"):
+-    return client.get("/view/courses",
++    return client.get("/view/student",
+                       query_string={"builder": builder, "category": category, "file": name})
+ 
+ 
+@@ -55,9 +56,9 @@ def test_two_tabs_opening_on_upload(client):
+     upload = client.get("/").get_data(as_text=True)
+     view = client.get("/view").get_data(as_text=True)
+     for body in (upload, view):
+-        assert 'href="/"' in body and 'href="/view"' in body
+-    assert '<a href="/" class="active"' in upload
+-    assert '<a href="/view" class="active"' in view
++        assert '<span class="group">Transcripts</span>' in body and 'href="/view"' in body
++        assert 'href="/"' not in body
++    assert 'class="sub active" aria-current="page">View' in view
+ 
+ 
+ def test_upload_page_has_the_form_and_category_panel(client, tmp_path):
+@@ -70,6 +71,24 @@ def test_upload_page_has_the_form_and_category_panel(client, tmp_path):
+     assert order == sorted(order)
+ 
+ 
++def test_transcripts_sub_items_show_one_panel_each(client):
++    both = client.get("/").get_data(as_text=True)
++    assert 'href="/transcripts/ftp-upload"' in both and 'href="/transcripts/category-build"' in both
++    assert 'class="split single"' not in both and "hidden>" not in both.split('<div class="split')[1][:400]
++
++    ftp = client.get("/transcripts/ftp-upload").get_data(as_text=True)
++    assert 'class="sub active" aria-current="page">FTP Upload' in ftp
++    assert 'aria-labelledby="category-heading" hidden' in ftp
++    assert 'aria-labelledby="upload-heading" hidden' not in ftp
++
++    build = client.get("/transcripts/category-build").get_data(as_text=True)
++    assert 'class="sub active" aria-current="page">Category Build' in build
++    assert 'aria-labelledby="upload-heading" hidden' in build
++    assert 'aria-labelledby="category-heading" hidden' not in build
++
++    assert client.get("/transcripts/other").status_code == 404
++
++
+ def test_favicon_is_empty(client):
+     assert client.get("/favicon.ico").status_code == 204
+ 
+@@ -94,6 +113,22 @@ def test_view_shows_every_student_with_a_min_courses_filter(client, folders):
+     assert "Held back" not in body
+ 
+ 
++def test_view_shows_each_students_recommend_letter_rank(client, tmp_path):
++    from letter_builder import rank_letters
++
++    letters = tmp_path / "letters"
++    letters.mkdir()
++    for name in ("ann_letter1.pdf", "ann_letter2.pdf"):
++        (letters / name).write_bytes(b"%PDF")
++    rank_letters.write_ranks(letters / "letter_ranks.csv", [("ann_letter1.txt", "excellent", 0.9),
++                                                            ("ann_letter2.txt", "good", 0.8)])
++    body = client.get("/view").get_data(as_text=True)
++    assert ">Recommend letter</button>" in body
++    ann, bob = body.split('data-file="ann.pdf"')[1], body.split('data-file="bob.pdf"')[1]
++    assert '<td data-sort="4">excellent</td>' in ann.split("</tr>")[0]
++    assert '<td data-sort="">–</td>' in bob.split("</tr>")[0]  # no letters
++
++
+ def test_view_picks_the_requested_category(client, folders):
+     built, _ = folders
+     (built / "law_gpa.csv").write_text(
+@@ -126,6 +161,27 @@ def test_courses_come_from_the_courses_csv(client, folders):
+     assert client.get(data["pdf_url"]).data == b"%PDF-1.4 ann"
+ 
+ 
++def test_student_detail_lists_the_students_letters_with_post_ranks(client, tmp_path):
++    from letter_builder import rank_letters
++
++    letters = tmp_path / "letters"
++    letters.mkdir()
++    for name in ("ann_letter1.pdf", "ann_letter2.pdf", "bob_letter1.pdf"):
++        (letters / name).write_bytes(b"%PDF")
++    rank_letters.write_ranks(letters / "letter_ranks.csv", [("ann_letter1.txt", "excellent", 0.5),
++                                                            ("ann_letter2.txt", "good", 0.9)])
++    data = courses_for(client, "ann.pdf").get_json()
++    assert data["letter_rank"] == "very good"  # excellent at 0.5 is post-ranked good
++    assert data["letters"] == [
++        {"file": "ann_letter1.pdf", "rank": "good", "pdf_url": "/letters/pdf?file=ann_letter1.pdf"},
++        {"file": "ann_letter2.pdf", "rank": "good", "pdf_url": "/letters/pdf?file=ann_letter2.pdf"}]
++    assert client.get(data["letters"][0]["pdf_url"]).status_code == 200
++    bob = courses_for(client, "bob.pdf").get_json()
++    assert bob["letters"] == [{"file": "bob_letter1.pdf", "rank": None,
++                               "pdf_url": "/letters/pdf?file=bob_letter1.pdf"}]
++    assert bob["letter_rank"] is None
++
++
+ def test_a_student_without_a_pdf_still_has_courses(client, folders):
+     data = courses_for(client, "bob.pdf").get_json()
+     assert data["gpa_capped"] is None and data["category_courses"] == 1
+diff --git a/backup/claude-2026-10-23/browser_view/templates/_student_dialog.html b/browser_view/templates/_student_dialog.html
+new file mode 100644
+index 0000000..ddffc14
+--- /dev/null
++++ b/browser_view/templates/_student_dialog.html
+@@ -0,0 +1,194 @@
++{# The student dialog, shared by Transcripts → View and Recommendations → View.
++   openStudent(file, {builder, category, title}) opens it for the transcript
++   named ``file``: a Transcript tab (PDF and, given a category, its courses) and
++   a Recommendation letters tab (each letter's post_rank rank and its PDF). #}
++<dialog id="student-dialog" aria-labelledby="student-title">
++  <div class="dialog-head">
++    <div>
++      <h2 id="student-title"></h2>
++      <p class="hint" id="student-meta"></p>
++    </div>
++    <button type="button" class="close" aria-label="Close">×</button>
++  </div>
++  <div class="dialog-tabs" role="tablist">
++    <button type="button" role="tab" id="tab-transcript" aria-controls="panel-transcript" aria-selected="true">Transcript</button>
++    <button type="button" role="tab" id="tab-letters" aria-controls="panel-letters" aria-selected="false">Recommendation letters</button>
++  </div>
++  <div class="dialog-body" id="panel-transcript" role="tabpanel" aria-labelledby="tab-transcript">
++    <section class="pdf-pane" id="pdf-pane" aria-label="Original transcript"></section>
++    <section class="courses-pane" id="courses-pane" aria-label="Extracted courses"></section>
++  </div>
++  <div class="dialog-body" id="panel-letters" role="tabpanel" aria-labelledby="tab-letters" hidden>
++    <section class="pdf-pane" id="letter-pdf-pane" aria-label="Recommendation letter"></section>
++    <section class="courses-pane" id="letters-pane" aria-label="Recommendation letters"></section>
++  </div>
++</dialog>
++
++<script>
++window.openStudent = (() => {
++  const dialog = document.getElementById("student-dialog");
++  const title = document.getElementById("student-title");
++  const meta = document.getElementById("student-meta");
++  const pdfPane = document.getElementById("pdf-pane");
++  const coursesPane = document.getElementById("courses-pane");
++  const letterPdfPane = document.getElementById("letter-pdf-pane");
++  const lettersPane = document.getElementById("letters-pane");
++  const tabs = {
++    transcript: [document.getElementById("tab-transcript"), document.getElementById("panel-transcript")],
++    letters: [document.getElementById("tab-letters"), document.getElementById("panel-letters")],
++  };
++
++  dialog.querySelector(".close").addEventListener("click", () => dialog.close());
++  // A click on the backdrop lands on the dialog element itself.
++  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
++  // Unload the PDFs on close so the next student never flashes the last one.
++  dialog.addEventListener("close", () => { pdfPane.replaceChildren(); letterPdfPane.replaceChildren(); });
++
++  function showTab(name) {
++    for (const [key, [tab, panel]] of Object.entries(tabs)) {
++      tab.setAttribute("aria-selected", String(key === name));
++      panel.hidden = key !== name;
++    }
++  }
++  for (const [key, [tab]] of Object.entries(tabs)) tab.addEventListener("click", () => showTab(key));
++
++  // textContent throughout: course titles and names come from PDFs.
++  function el(tag, text, className) {
++    const node = document.createElement(tag);
++    if (text !== undefined && text !== null) node.textContent = text;
++    if (className) node.className = className;
++    return node;
++  }
++  const fmt = (n, digits) => (n === null || n === undefined ? "–" : Number(n).toFixed(digits));
++
++  // A PDF with its name and an "Open in a new tab" link, as both tabs show it.
++  function showPdf(pane, file, url, label, missing) {
++    if (!url) {
++      pane.replaceChildren(el("div", missing, "error"));
++      return;
++    }
++    const frame = el("iframe");
++    frame.src = url;
++    frame.title = label;
++    const link = el("a", "Open in a new tab");
++    link.href = url;
++    link.target = "_blank";
++    link.rel = "noopener";
++    const caption = el("p", null, "hint");
++    caption.style.margin = "0 0 .5rem";
++    caption.append(`${file} · `, link);
++    pane.replaceChildren(caption, frame);
++  }
++
++  function renderPdf(record) {
++    showPdf(pdfPane, record.file, record.pdf_url, `${record.student} — ${record.file}`,
++      `The original PDF (${record.file}) was not found in work-folder or pdf-folder.`);
++  }
++
++  // Letters tab: the selected letter's PDF on the left, every letter and its
++  // (post_rank) rank on the right; click a letter to show it.
++  function renderLetters(record) {
++    const letters = record.letters || [];
++    tabs.letters[0].textContent = `Recommendation letters (${letters.length})`;
++    if (!letters.length) {
++      letterPdfPane.replaceChildren();
++      lettersPane.replaceChildren(el("p", "No recommendation letters for this student.", "panel"));
++      return;
++    }
++    const summary = el("p", null, "hint");
++    summary.style.margin = "0 0 .5rem";
++    summary.textContent = `Recommend letter: ${record.letter_rank || "not ranked yet"}`;
++    const tbl = el("table", null, "courses");
++    const head = tbl.createTHead().insertRow();
++    head.append(el("th", "Letter"), el("th", "Rank"));
++    const tbody = tbl.createTBody();
++    function select(index) {
++      const letter = letters[index];
++      [...tbody.rows].forEach((row, i) => row.classList.toggle("in-category", i === index));
++      showPdf(letterPdfPane, letter.file, letter.pdf_url, letter.file, "");
++    }
++    letters.forEach((letter, index) => {
++      const row = tbody.insertRow();
++      row.className = "student";
++      row.tabIndex = 0;
++      row.append(el("td", letter.file, "code"), el("td", letter.rank || "not ranked"));
++      row.addEventListener("click", () => select(index));
++      row.addEventListener("keydown", (e) => {
++        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(index); }
++      });
++    });
++    const wrap = el("div", null, "table-wrap scroll");
++    wrap.append(tbl);
++    lettersPane.replaceChildren(summary, wrap);
++    select(0);
++  }
++
++  function renderCourses(record, category) {
++    if (!category) {
++      coursesPane.replaceChildren(el("p",
++        "No category results yet: build a category to see this transcript's courses.", "panel"));
++      return;
++    }
++    const courses = record.courses || [];
++    if (!courses.length) {
++      coursesPane.replaceChildren(el("p", "No courses were extracted from this transcript.", "panel"));
++      return;
++    }
++    const tbl = el("table", null, "courses");
++    const head = tbl.createTHead().insertRow();
++    for (const [label, cls] of [["Term"], ["Code"], ["Title"], ["Grade"],
++        [record.credit_label || "Credits", "num"], ["Points (4.0)", "num"], [category], ["In GPA"]]) {
++      head.append(el("th", label, cls));
++    }
++    const tbody = tbl.createTBody();
++    let lastTerm = null;
++    for (const c of courses) {
++      const row = tbody.insertRow();
++      if (c.in_category) row.className = "in-category";
++      // Show each term once, at the first course in it.
++      row.append(el("td", c.term === lastTerm ? "" : c.term, "term"));
++      lastTerm = c.term;
++      row.append(el("td", c.code, "code"), el("td", c.title), el("td", c.grade),
++        el("td", fmt(c.credits, 1), "num"), el("td", fmt(c.grade_points_4pt, 2), "num"),
++        el("td", c.in_category ? "✓" : ""), el("td", c.counts_toward_gpa ? "✓" : "no"));
++    }
++    const wrap = el("div", null, "table-wrap scroll");
++    wrap.append(tbl);
++    coursesPane.replaceChildren(wrap);
++  }
++
++  return async function openStudent(file, { builder = "", category = "", title: label = "" } = {}) {
++    title.textContent = label;
++    meta.textContent = "";
++    pdfPane.replaceChildren(el("p", "Loading…", "hint"));
++    coursesPane.replaceChildren();
++    letterPdfPane.replaceChildren();
++    lettersPane.replaceChildren();
++    tabs.letters[0].textContent = "Recommendation letters";
++    showTab("transcript");
++    dialog.showModal();
++    try {
++      const query = new URLSearchParams({ file });
++      if (category) { query.set("builder", builder); query.set("category", category); }
++      const response = await fetch(`/view/student?${query}`);
++      const data = await response.json().catch(() => ({ error: `server returned ${response.status}` }));
++      if (!response.ok) throw new Error(data.error || `server returned ${response.status}`);
++
++      title.textContent = data.student;
++      meta.textContent = [
++        data.institution, data.program,
++        category && `${category} GPA ${fmt(data.gpa_capped, 3)}`,
++        category && `all courses ${fmt(data.overall_gpa_capped, 3)}`,
++        category && `${data.category_courses} of ${data.total_courses} courses in ${category}`,
++        `recommend letter ${data.letter_rank || "–"}`,
++      ].filter(Boolean).join(" · ");
++      renderPdf(data);
++      renderCourses(data, category);
++      renderLetters(data);
++    } catch (err) {
++      pdfPane.replaceChildren();
++      coursesPane.replaceChildren(el("div", `Error: ${err.message}`, "error"));
++    }
++  };
++})();
++</script>
+diff --git a/backup/claude-2026-10-23/browser_view/templates/letters_upload.html b/browser_view/templates/letters_upload.html
+new file mode 100644
+index 0000000..c0ff49b
+--- /dev/null
++++ b/browser_view/templates/letters_upload.html
+@@ -0,0 +1,135 @@
++{% extends "base.html" %}
++
++{% block title %}Transcripts and Recommendation Letters — letters upload{% endblock %}
++
++{% block body %}
++<section aria-labelledby="letters-heading" class="help">
++<h2 id="letters-heading" style="margin-top:0">Upload</h2>
++<form id="letters-form" method="post" action="/letters/upload" enctype="multipart/form-data">
++  <fieldset>
++    <legend>Recommendation letters</legend>
++    <label for="letter-pdfs">Upload letters</label>
++    <input type="file" id="letter-pdfs" name="pdfs" accept="application/pdf,.pdf" multiple>
++    <p class="hint">Leave empty to take every PDF already in <code>{{ folder }}</code>,
++      the <code>letters-folder</code> in config.yaml. A letter that already has a
++      <code>&lt;name&gt;.txt</code> there was uploaded before and is skipped.</p>
++  </fieldset>
++
++  <fieldset>
++    <legend>Output</legend>
++    <p class="hint" style="margin-top:0">New PDFs are saved in <code>{{ folder }}</code>.
++      Each becomes <code>&lt;name&gt;.txt</code>
++      (<code>pdftotext -layout</code>), and Jev ranks it as an excellent, good or normal
++      letter, about a second per letter. The ranks are added to
++      <code>{{ folder }}/letter_ranks.csv</code>, which the View page shows.</p>
++  </fieldset>
++
++  <button type="submit">Upload</button>
++</form>
++
++<div id="letters-progress" class="progress" hidden>
++  <progress id="letters-progress-bar"></progress>
++</div>
++<div id="letters-status" class="status" role="status" aria-live="polite" hidden></div>
++</section>
++
++<script>
++(() => {
++  const form = document.getElementById("letters-form");
++  const button = form.querySelector("button[type=submit]");
++  const status = document.getElementById("letters-status");
++  const progress = document.getElementById("letters-progress");
++  const bar = document.getElementById("letters-progress-bar");
++  let poller = null;
++
++  // textContent throughout: messages carry file names and paths.
++  function show(kind, title, lines = [], link = null) {
++    const box = document.createElement("div");
++    box.className = kind;
++    const head = document.createElement("strong");
++    head.textContent = title;
++    box.append(head);
++    if (link) {
++      const a = document.createElement("a");
++      a.href = link.href;
++      a.textContent = link.text;
++      box.append(" ", a);
++    }
++    if (lines.length) {
++      const list = document.createElement("ul");
++      list.className = "notes";
++      for (const line of lines) {
++        const item = document.createElement("li");
++        item.textContent = line;
++        list.append(item);
++      }
++      box.append(list);
++    }
++    status.replaceChildren(box);
++    status.hidden = false;
++  }
++
++  function render(state) {
++    const running = state.status === "running";
++    button.disabled = running;
++    progress.hidden = !running;
++    if (running) {
++      bar.max = state.total || 1;
++      bar.value = state.done || 0;
++      show("running", `Ranking… ${state.done} of ${state.total} letters, ${state.elapsed}s`);
++      return;
++    }
++    clearInterval(poller);
++    poller = null;
++    const failures = (state.failures || []).map(f => `${f.file}: ${f.error}`);
++    const skipped = (state.skipped || []).map(name => `${name}: already uploaded, skipped`);
++    if (state.status === "skipped") {
++      show("ok", `Nothing new: all ${skipped.length} letter(s) were uploaded before.`, skipped,
++        { href: "/letters/view", text: "View ranks" });
++    } else if (state.status === "done") {
++      show(failures.length ? "error" : "ok",
++        `Ranked ${state.ranked} of ${state.total} new letters in ${state.elapsed}s` +
++        (failures.length ? `; ${failures.length} failed` : "") +
++        (skipped.length ? `; ${skipped.length} skipped.` : "."),
++        [...failures, ...skipped], { href: "/letters/view", text: "View ranks" });
++    } else if (state.status === "error") {
++      show("error", `Error: ${state.error}`, failures);
++    }
++  }
++
++  async function poll() {
++    try {
++      const response = await fetch("/letters/status");
++      render(await response.json());
++    } catch (err) {
++      clearInterval(poller);
++      poller = null;
++      button.disabled = false;
++      show("error", `Error: ${err.message}`);
++    }
++  }
++  function follow() { if (!poller) poller = setInterval(poll, 1000); }
++
++  form.addEventListener("submit", async (event) => {
++    event.preventDefault();
++    button.disabled = true;
++    show("running", "Uploading…");
++    try {
++      const response = await fetch(form.action, { method: "POST", body: new FormData(form) });
++      const data = await response.json().catch(() => ({ error: `server returned ${response.status}` }));
++      if (!response.ok && data.status !== "running") throw new Error(data.error);
++      render(data);
++      follow();
++    } catch (err) {
++      button.disabled = false;
++      show("error", `Error: ${err.message}`);
++    }
++  });
++
++  // A run started earlier (or in another tab) keeps reporting here.
++  fetch("/letters/status").then(r => r.json()).then(state => {
++    if (state.status === "running") { render(state); follow(); }
++  }).catch(() => {});
++})();
++</script>
++{% endblock %}
+diff --git a/backup/claude-2026-10-23/browser_view/templates/letters_view.html b/browser_view/templates/letters_view.html
+new file mode 100644
+index 0000000..91e106c
+--- /dev/null
++++ b/browser_view/templates/letters_view.html
+@@ -0,0 +1,120 @@
++{% extends "base.html" %}
++
++{% block title %}Transcripts and Recommendation Letters — letters view{% endblock %}
++
++{% block body %}
++<div class="view-controls">
++  <div>
++    <label for="rank-filter">Group rank</label>
++    <select id="rank-filter">
++      <option value="">All</option>
++      {% for r in group_ranks %}<option value="{{ r }}">{{ r|capitalize }}</option>{% endfor %}
++    </select>
++  </div>
++  <button type="button" class="secondary" onclick="location.reload()"
++          title="Read the letters folder again, e.g. after an upload">Reload</button>
++</div>
++
++{% if error %}<div class="error">{{ error }}</div>{% endif %}
++
++{% if students %}
++  <h2>Recommendation letters</h2>
++  <p class="hint" style="margin-top:-.4rem">
++    One row per student with letters in <code>{{ folder }}</code>. Group rank combines the
++    student's letter ranks (after post_rank): very excellent, all excellent; excellent, at
++    least one excellent and the rest good; very good, all good; good, at least one good;
++    normal, all normal. Click a column name to sort; click a student to open their details.
++    <span id="shown-count"></span>
++  </p>
++  <div class="table-wrap scroll">
++  <table id="letter-students">
++    <thead>
++      <tr>
++        <th><button type="button" class="sort">Student</button></th>
++        <th class="num" data-type="num"><button type="button" class="sort">Letters</button></th>
++        <th data-type="num" aria-sort="descending"><button type="button" class="sort">Group rank</button></th>
++      </tr>
++    </thead>
++    <tbody>
++      {% for s in students %}
++      <tr data-index="{{ loop.index0 }}" data-rank="{{ s.group_rank or '' }}">
++        <td><a href="#" class="student-link" data-file="{{ s.file }}"
++               data-transcript="{{ 1 if s.has_transcript else 0 }}">{{ s.student }}</a></td>
++        <td class="num" data-sort="{{ s.letters }}">{{ s.letters }}</td>
++        {# very excellent sorts highest; a student without ranked letters last #}
++        <td data-sort="{{ group_ranks|length - group_ranks.index(s.group_rank) if s.group_rank in group_ranks else '' }}">
++          {{- s.group_rank or '–' -}}</td>
++      </tr>
++      {% endfor %}
++    </tbody>
++  </table>
++  </div>
++{% endif %}
++
++{% include "_student_dialog.html" %}
++
++<script>
++(() => {
++  const table = document.getElementById("letter-students");
++  if (!table) return;
++  const body = table.tBodies[0];
++
++  // ---- sorting: numbers high-to-low first, text A-Z; then toggle ----------
++  const headers = [...table.tHead.rows[0].cells];
++  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
++  function sortBy(index) {
++    const th = headers[index];
++    const numeric = th.dataset.type === "num";
++    const current = th.getAttribute("aria-sort");
++    const direction = current
++      ? (current === "ascending" ? "descending" : "ascending")
++      : (numeric ? "descending" : "ascending");
++    const sign = direction === "ascending" ? 1 : -1;
++    const key = (row) => numeric ? row.cells[index].dataset.sort : row.cells[index].textContent.trim();
++    const rows = [...body.rows];
++    rows.sort((a, b) => {
++      const x = key(a), y = key(b);
++      if (x === "" || y === "") return (x === "") - (y === "");
++      const order = numeric ? Number(x) - Number(y) : collator.compare(x, y);
++      return sign * order || Number(a.dataset.index) - Number(b.dataset.index);
++    });
++    body.append(...rows);
++    headers.forEach((h) => h.removeAttribute("aria-sort"));
++    th.setAttribute("aria-sort", direction);
++  }
++  headers.forEach((th, i) => th.querySelector("button.sort").addEventListener("click", () => sortBy(i)));
++  // Open sorted by group rank, best first (the header already shows that).
++  headers[2].removeAttribute("aria-sort");
++  sortBy(2);
++
++  // ---- group rank filter ----------------------------------------------------
++  const filterSelect = document.getElementById("rank-filter");
++  const shown = document.getElementById("shown-count");
++  function filter() {
++    const want = filterSelect.value;
++    let count = 0;
++    for (const row of body.rows) {
++      row.hidden = Boolean(want) && row.dataset.rank !== want;
++      if (!row.hidden) count++;
++    }
++    const total = body.rows.length;
++    shown.textContent = count === total ? `${total} students.` : `Showing ${count} of ${total} students.`;
++  }
++  filterSelect.addEventListener("change", filter);
++  filter();
++
++  // ---- student link: the shared student dialog --------------------------------
++  const builder = {{ builder|tojson }};
++  const category = {{ category|tojson }};
++  body.addEventListener("click", (e) => {
++    const link = e.target.closest("a.student-link");
++    if (!link) return;
++    e.preventDefault();
++    // A student without a transcript is in no category's results: letters only.
++    const withCourses = link.dataset.transcript === "1" && category;
++    openStudent(link.dataset.file, { builder, category: withCourses ? category : "",
++                                     title: link.textContent });
++  });
++})();
++</script>
++{% endblock %}
+diff --git a/backup/claude-2026-10-23/tests/test_letters.py b/tests/test_letters.py
+new file mode 100644
+index 0000000..106a5e0
+--- /dev/null
++++ b/tests/test_letters.py
+@@ -0,0 +1,312 @@
++"""letter_builder and browser_view's Recommendations pages; Jev and pdftotext are faked."""
++
++import io
++import time
++
++import pytest
++
++from browser_view.app import create_app
++from jev_category.client import JevError
++from letter_builder import RANKS_CSV, letters_folder, pdf2txt, post_rank, rank_letters
++
++
++class FakeJev:
++    """Stands in for JevClient: a letter's text says its rank; "boom" fails."""
++
++    model = "jev-test"
++
++    def __init__(self):
++        self.asked = []
++
++    def _post(self, body):
++        letter = body["state"]["letter"]
++        self.asked.append(letter)
++        if "boom" in letter:
++            raise JevError("HTTP 500: down")
++        choice = next(c for c in rank_letters.CRITERIA if c in letter)
++        return {"answers": {"rank": {"type": "choice", "choice": choice, "confidence": 0.8}}}
++
++
++def fake_pdftotext(pdf):
++    if b"broken" in pdf.read_bytes():
++        raise RuntimeError("Syntax Error: not a PDF")
++    txt = pdf.with_suffix(".txt")
++    txt.write_bytes(pdf.read_bytes())  # the "PDF" is its own text in these tests
++    return txt
++
++
++@pytest.fixture
++def jev(monkeypatch):
++    fake = FakeJev()
++    monkeypatch.setattr(rank_letters, "jev_client", lambda raw: fake)
++    monkeypatch.setattr(pdf2txt, "convert_one", fake_pdftotext)
++    return fake
++
++
++@pytest.fixture
++def letters(tmp_path):
++    folder = tmp_path / "letters"
++    folder.mkdir()
++    (folder / "ann_letter1.pdf").write_bytes(b"an excellent letter")
++    config = tmp_path / "config.yaml"
++    config.write_text(f"letters-folder: {folder}\n")
++    return folder, config
++
++
++@pytest.fixture
++def client(letters):
++    return create_app(letters[1]).test_client()
++
++
++def wait_for_letters(client):
++    for _ in range(100):
++        state = client.get("/letters/status").get_json()
++        if state["status"] != "running":
++            return state
++        time.sleep(0.05)
++    raise AssertionError("letter run did not finish")
++
++
++# --- letter_builder ---------------------------------------------------------------
++
++def test_letters_folder_comes_from_config_with_a_default():
++    assert letters_folder({"letters-folder": "/x/letters"}).as_posix() == "/x/letters"
++    assert letters_folder({}).name == "letters"
++
++
++def test_rank_asks_one_choice_question():
++    fake = FakeJev()
++    assert rank_letters.rank(fake, "a good letter") == ("good", 0.8)
++
++
++def test_rank_rejects_an_unknown_choice():
++    class Odd(FakeJev):
++        def _post(self, body):
++            return {"answers": {"rank": {"choice": "superb"}}}
++
++    with pytest.raises(JevError):
++        rank_letters.rank(Odd(), "text")
++
++
++def test_jev_client_needs_the_api_key(monkeypatch):
++    monkeypatch.delenv("GPA_TOOLS_KEY", raising=False)
++    with pytest.raises(JevError, match="GPA_TOOLS_KEY"):
++        rank_letters.jev_client({})
++
++
++def test_merge_replaces_rows_by_filename(tmp_path):
++    path = tmp_path / RANKS_CSV
++    rank_letters.write_ranks(path, [("a.txt", "good", 0.5), ("b.txt", "normal", 0.4)])
++    rank_letters.merge_ranks(path, [("b.txt", "excellent", 0.9), ("c.txt", "good", 0.7)])
++    rows = rank_letters.read_ranks(path)
++    assert list(rows) == ["a.txt", "b.txt", "c.txt"]
++    assert rows["b.txt"]["rank"] == "excellent" and rows["b.txt"]["confidence"] == "0.900"
++
++
++@pytest.mark.parametrize("rank, confidence, adjusted", [
++    ("good", 0.69, "normal"), ("good", 0.7, "good"),
++    ("excellent", 0.39, "normal"), ("excellent", 0.4, "good"), ("excellent", 0.69, "good"),
++    ("excellent", 0.7, "excellent"), ("normal", 0.1, "normal"), ("good", None, "normal"),
++])
++def test_post_rank_rules(rank, confidence, adjusted):
++    assert post_rank.adjust(rank, confidence) == adjusted
++
++
++def test_post_rank_keeps_jevs_rank_and_leaves_the_csv_alone(tmp_path):
++    path = tmp_path / RANKS_CSV
++    rank_letters.write_ranks(path, [("a.txt", "excellent", 0.5), ("b.txt", "good", 0.9)])
++    before = path.read_text()
++    rows = post_rank.post_rank(path)
++    assert [(r["filename"], r["jev_rank"], r["rank"]) for r in rows] == [
++        ("a.txt", "excellent", "good"), ("b.txt", "good", "good")]
++    assert path.read_text() == before
++
++
++# --- pages ------------------------------------------------------------------------
++
++def test_left_bar_has_the_recommendations_group(client):
++    body = client.get("/letters/ftp-upload").get_data(as_text=True)
++    assert '<span class="group">Recommendations</span>' in body
++    assert 'href="/letters/ftp-upload" class="sub active" aria-current="page"' in body
++    assert 'href="/letters/view" class="sub"' in body
++    assert 'class="sub active" aria-current="page">View' in client.get("/letters/view").get_data(as_text=True)
++
++
++def test_upload_saves_converts_and_ranks_in_the_background(client, jev, letters):
++    folder, _ = letters
++    files = [(io.BytesIO(b"a good letter"), "../bob_letter1.pdf"),
++             (io.BytesIO(b"a normal letter"), "cy_letter1.pdf")]
++    r = client.post("/letters/upload", data={"pdfs": files}, content_type="multipart/form-data")
++    assert r.status_code == 200
++    state = wait_for_letters(client)
++    assert state["status"] == "done" and state["ranked"] == 2 and state["total"] == 2
++    assert (folder / "bob_letter1.pdf").is_file() and (folder / "bob_letter1.txt").is_file()
++    rows = rank_letters.read_ranks(folder / RANKS_CSV)
++    assert {n: r["rank"] for n, r in rows.items()} == {"bob_letter1.txt": "good",
++                                                      "cy_letter1.txt": "normal"}
++
++
++def test_upload_without_files_ranks_the_whole_folder_and_keeps_old_ranks(client, jev, letters):
++    folder, _ = letters
++    rank_letters.write_ranks(folder / RANKS_CSV, [("old.txt", "good", 0.6)])
++    client.post("/letters/upload")
++    assert wait_for_letters(client)["ranked"] == 1
++    rows = rank_letters.read_ranks(folder / RANKS_CSV)
++    assert rows["ann_letter1.txt"]["rank"] == "excellent" and rows["old.txt"]["rank"] == "good"
++
++
++def test_letters_with_a_txt_are_skipped_not_replaced(client, jev, letters):
++    folder, _ = letters
++    (folder / "ann_letter1.txt").write_text("an excellent letter")
++    files = [(io.BytesIO(b"a good letter, again"), "ann_letter1.pdf"),
++             (io.BytesIO(b"a normal letter"), "dan_letter1.pdf")]
++    client.post("/letters/upload", data={"pdfs": files}, content_type="multipart/form-data")
++    state = wait_for_letters(client)
++    assert state["ranked"] == 1 and state["skipped"] == ["ann_letter1.pdf"]
++    assert (folder / "ann_letter1.pdf").read_bytes() == b"an excellent letter"
++    assert list(rank_letters.read_ranks(folder / RANKS_CSV)) == ["dan_letter1.txt"]
++    assert jev.asked == ["a normal letter"]
++
++
++def test_nothing_new_starts_no_run(client, jev, letters):
++    folder, _ = letters
++    (folder / "ann_letter1.txt").write_text("an excellent letter")
++    r = client.post("/letters/upload")
++    assert r.get_json() == {"status": "skipped", "skipped": ["ann_letter1.pdf"]}
++    assert client.get("/letters/status").get_json() == {"status": "idle"} and jev.asked == []
++
++
++def test_failed_letters_are_listed_and_the_rest_ranked(client, jev, letters):
++    files = [(io.BytesIO(b"broken"), "x.pdf"), (io.BytesIO(b"boom"), "y.pdf"),
++             (io.BytesIO(b"a good letter"), "z.pdf")]
++    client.post("/letters/upload", data={"pdfs": files}, content_type="multipart/form-data")
++    state = wait_for_letters(client)
++    assert state["status"] == "done" and state["ranked"] == 1
++    assert [f["file"] for f in state["failures"]] == ["x.pdf", "y.pdf"]
++
++
++def test_upload_errors(client, jev, letters, monkeypatch):
++    r = client.post("/letters/upload", data={"pdfs": [(io.BytesIO(b"x"), "notes.txt")]},
++                    content_type="multipart/form-data")
++    assert r.status_code == 400 and "not a PDF" in r.get_json()["error"]
++    (letters[0] / "ann_letter1.pdf").unlink()
++    r = client.post("/letters/upload")
++    assert r.status_code == 400 and "no PDFs" in r.get_json()["error"]
++
++    def no_key(raw):
++        raise JevError("set the API key in the GPA_TOOLS_KEY environment variable")
++    monkeypatch.setattr(rank_letters, "jev_client", no_key)
++    r = client.post("/letters/upload")
++    assert r.status_code == 400 and "GPA_TOOLS_KEY" in r.get_json()["error"]
++
++
++def test_view_lists_one_row_per_student_with_a_group_rank(client, letters, tmp_path):
++    folder, config = letters
++    pdfs = tmp_path / "pdfs"
++    pdfs.mkdir()
++    (pdfs / "ann.pdf").write_bytes(b"%PDF ann")
++    (pdfs / "cy.pdf").write_bytes(b"%PDF cy")  # no letters: not listed
++    config.write_text(f"letters-folder: {folder}\npdf-folder: {pdfs}\n")
++    (folder / "ann_letter2.pdf").write_bytes(b"a good letter")
++    (folder / "eve_letter1.pdf").write_bytes(b"an excellent letter")  # no transcript
++    rank_letters.write_ranks(folder / RANKS_CSV, [("ann_letter1.txt", "excellent", 0.91),
++                                                  ("ann_letter2.txt", "good", 0.8),
++                                                  ("eve_letter1.txt", "excellent", 0.55)])
++    body = client.get("/letters/view").get_data(as_text=True)
++    rows = body.split("<tbody>")[1].split("</tbody>")[0].split("</tr>")[:-1]
++    assert len(rows) == 2
++    ann, eve = rows
++    assert 'data-rank="excellent"' in ann and 'data-file="ann.pdf"' in ann
++    assert 'data-transcript="1">Ann</a>' in ann and 'data-sort="2">2</td>' in ann
++    # post_rank: excellent at 0.55 -> good; one good letter -> very good
++    assert 'data-rank="very good"' in eve and 'data-file="eve.pdf"' in eve
++    assert 'data-transcript="0">Eve</a>' in eve and 'data-sort="1">1</td>' in eve
++    assert 'id="student-dialog"' in body
++
++
++def test_student_detail_without_a_category_has_pdf_and_letters(client, letters, tmp_path):
++    folder, config = letters
++    pdfs = tmp_path / "pdfs"
++    pdfs.mkdir()
++    (pdfs / "ann.pdf").write_bytes(b"%PDF ann")
++    config.write_text(f"letters-folder: {folder}\npdf-folder: {pdfs}\n")
++    rank_letters.write_ranks(folder / RANKS_CSV, [("ann_letter1.txt", "excellent", 0.91)])
++    data = client.get("/view/student", query_string={"file": "ann.pdf"}).get_json()
++    assert data["student"] == "Ann" and data["courses"] is None
++    assert data["pdf_url"] == "/view/pdf?file=ann.pdf" and data["letter_rank"] == "very excellent"
++    assert [letter["file"] for letter in data["letters"]] == ["ann_letter1.pdf"]
++    eve = client.get("/view/student", query_string={"file": "eve.pdf"}).get_json()
++    assert eve["pdf_url"] is None and eve["letters"] == []
++    assert client.get("/view/student", query_string={"file": "../x"}).status_code == 404
++
++
++def test_letter_pdfs_are_served_only_from_the_letters_folder(client, letters):
++    assert client.get("/letters/pdf", query_string={"file": "ann_letter1.pdf"}).status_code == 200
++    for bad in ("../config.yaml", "gone.pdf", "ann_letter1.txt", ""):
++        assert client.get("/letters/pdf", query_string={"file": bad}).status_code == 404
++
++
++def test_view_explains_when_there_are_no_letters(client, letters):
++    (letters[0] / "ann_letter1.pdf").unlink()
++    body = client.get("/letters/view").get_data(as_text=True)
++    assert "no recommendation letters" in body and 'id="letter-students"' not in body
++
++
++# --- student records ----------------------------------------------------------------
++
++def test_student_info_gives_one_record_per_student():
++    from letter_builder.students import student_info
++
++    ranks = {"adam_flores_letter1": "good", "adam_flores_letter2": "excellent",
++             "bob_ray_letter1": "good"}
++    records = student_info(
++        ["/t/bob_ray.pdf", "adam_flores.pdf", "cy_lee.pdf"],
++        ["adam_flores_letter2.pdf", "/l/adam_flores_letter1.pdf", "bob_ray_letter1.pdf",
++         "dan_wu_letter1.pdf"], ranks)
++    assert records == [
++        {"student": "adam_flores", "transcript": "adam_flores.pdf",
++         "letters": [{"file": "adam_flores_letter1.pdf", "rank": "good"},
++                     {"file": "adam_flores_letter2.pdf", "rank": "excellent"}],
++         "group_rank": "excellent"},
++        {"student": "bob_ray", "transcript": "bob_ray.pdf",
++         "letters": [{"file": "bob_ray_letter1.pdf", "rank": "good"}], "group_rank": "very good"},
++        {"student": "cy_lee", "transcript": "cy_lee.pdf", "letters": [], "group_rank": None},
++        {"student": "dan_wu", "transcript": None,
++         "letters": [{"file": "dan_wu_letter1.pdf", "rank": None}], "group_rank": None},
++    ]
++
++
++@pytest.mark.parametrize("ranks, expected", [
++    (["excellent", "excellent", "excellent"], "very excellent"),
++    (["excellent"], "very excellent"),
++    (["excellent", "good", "good"], "excellent"),
++    (["excellent", "excellent", "good"], "excellent"),
++    (["good", "good", "good"], "very good"),
++    (["good", "normal", "normal"], "good"),
++    (["excellent", "good", "normal"], "good"),
++    (["excellent", "normal"], "good"),
++    (["normal", "normal", "normal"], "normal"),
++    (["good", None], "very good"),
++    ([None, None], None),
++    ([], None),
++])
++def test_group_rank_rules(ranks, expected):
++    from letter_builder.students import group_rank
++
++    assert group_rank(ranks) == expected
++
++
++def test_letter_ranks_are_the_post_ranked_ones(tmp_path):
++    from letter_builder.students import letter_ranks
++
++    rank_letters.write_ranks(tmp_path / RANKS_CSV, [("a_letter1.txt", "excellent", 0.5),
++                                                    ("a_letter2.txt", "good", 0.9)])
++    assert letter_ranks(tmp_path) == {"a_letter1": "good", "a_letter2": "good"}
++
++
++def test_student_key_strips_only_the_letter_suffix():
++    from letter_builder.students import student_key
++
++    assert student_key("yan_letter3.pdf") == "yan"
++    assert student_key("letterman_letter10.txt") == "letterman"
++    assert student_key("ann.pdf") == "ann"
+diff --git a/backup/claude-2026-10-23/letter_builder/__init__.py b/letter_builder/__init__.py
+new file mode 100644
+index 0000000..977500c
+--- /dev/null
++++ b/letter_builder/__init__.py
+@@ -0,0 +1,31 @@
++"""letter-builder: recommendation letters, from PDF to an excellent/good/normal rank.
++
++pdf2txt turns each <name>.pdf in config.yaml's letters-folder into <name>.txt
++beside it; rank_letters asks TypeSafe's Jev to rank each letter and writes
++<letters-folder>/letter_ranks.csv.  browser_view's Recommendations pages run
++both on uploaded letters.
++
++Run:  python -m letter_builder.pdf2txt
++      python -m letter_builder.rank_letters
++"""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++import yaml
++
++DEFAULT_FOLDER = "~/Templates/letters"
++RANKS_CSV = "letter_ranks.csv"
++
++
++def load_raw(config_path: Path) -> dict:
++    try:
++        return yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
++    except (OSError, yaml.YAMLError):
++        return {}
++
++
++def letters_folder(raw: dict) -> Path:
++    """config.yaml's letters-folder, else ~/Templates/letters."""
++    return Path(raw.get("letters-folder") or DEFAULT_FOLDER).expanduser()
+diff --git a/backup/claude-2026-10-23/letter_builder/pdf2txt.py b/letter_builder/pdf2txt.py
+new file mode 100644
+index 0000000..2ad0527
+--- /dev/null
++++ b/letter_builder/pdf2txt.py
+@@ -0,0 +1,56 @@
++"""python -m letter_builder.pdf2txt [--folder DIR] [--config config.yaml]
++
++Converts every <name>.pdf in the folder (default: config.yaml's letters-folder)
++to <name>.txt next to it, with `pdftotext -layout` (the same tool upload uses).
++"""
++
++from __future__ import annotations
++
++import argparse
++import subprocess
++import sys
++from pathlib import Path
++
++from letter_builder import letters_folder, load_raw
++
++
++def convert_one(pdf: Path) -> Path:
++    """<name>.txt beside ``pdf``; RuntimeError when pdftotext fails."""
++    txt = pdf.with_suffix(".txt")
++    try:
++        result = subprocess.run(["pdftotext", "-layout", str(pdf), str(txt)],
++                                capture_output=True, text=True)
++    except OSError as exc:
++        raise RuntimeError(f"pdftotext: {exc}") from None
++    if result.returncode != 0:
++        raise RuntimeError(result.stderr.strip() or f"pdftotext exited with {result.returncode}")
++    return txt
++
++
++def convert(folder: Path) -> tuple[int, list[str]]:
++    """(PDFs converted, names that failed)."""
++    done, failed = 0, []
++    for pdf in sorted(folder.glob("*.pdf")):
++        try:
++            convert_one(pdf)
++        except RuntimeError as exc:
++            failed.append(pdf.name)
++            print(f"failed: {pdf.name}: {exc}", file=sys.stderr)
++        else:
++            done += 1
++    return done, failed
++
++
++def main(argv=None) -> int:
++    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
++    parser.add_argument("--folder", type=Path)
++    parser.add_argument("--config", type=Path, default=Path("config.yaml"))
++    args = parser.parse_args(argv)
++    folder = (args.folder or letters_folder(load_raw(args.config))).expanduser()
++    done, failed = convert(folder)
++    print(f"converted {done} PDFs in {folder}, {len(failed)} failed")
++    return 1 if failed else 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/backup/claude-2026-10-23/letter_builder/post_rank.py b/letter_builder/post_rank.py
+new file mode 100644
+index 0000000..8c3e3c5
+--- /dev/null
++++ b/letter_builder/post_rank.py
+@@ -0,0 +1,71 @@
++"""python -m letter_builder.post_rank [--folder DIR] [--config config.yaml]
++
++Adjusts Jev's letter ranks by its confidence, in this order:
++
++    good      below 0.7         -> normal
++    excellent below 0.4         -> normal
++    excellent 0.4 up to 0.7     -> good
++
++so a letter only keeps a high rank when Jev was sure of it.  letter_ranks.csv
++itself is never changed; the View page applies this when it reads the file.
++"""
++
++from __future__ import annotations
++
++import argparse
++import sys
++from pathlib import Path
++
++from letter_builder import RANKS_CSV, letters_folder, load_raw
++from letter_builder.rank_letters import read_ranks
++
++GOOD_MIN = 0.7
++EXCELLENT_MIN = 0.7
++EXCELLENT_TO_NORMAL_BELOW = 0.4
++
++
++def adjust(rank: str, confidence: float | None) -> str:
++    """The rank after the confidence rules above."""
++    confidence = confidence or 0.0
++    if rank == "good" and confidence < GOOD_MIN:
++        return "normal"
++    if rank == "excellent" and confidence < EXCELLENT_TO_NORMAL_BELOW:
++        return "normal"
++    if rank == "excellent" and confidence < EXCELLENT_MIN:
++        return "good"
++    return rank
++
++
++def post_rank(path: Path) -> list[dict]:
++    """letter_ranks.csv rows, each with ``jev_rank`` (as Jev answered) and ``rank`` (adjusted)."""
++    rows = []
++    for name, row in read_ranks(path).items():
++        try:
++            confidence = float(row.get("confidence") or 0)
++        except ValueError:
++            confidence = 0.0
++        jev_rank = row.get("rank") or ""
++        rows.append({"filename": name, "jev_rank": jev_rank, "confidence": confidence,
++                     "rank": adjust(jev_rank, confidence)})
++    return rows
++
++
++def main(argv=None) -> int:
++    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
++    parser.add_argument("--folder", type=Path)
++    parser.add_argument("--config", type=Path, default=Path("config.yaml"))
++    args = parser.parse_args(argv)
++    folder = (args.folder or letters_folder(load_raw(args.config))).expanduser()
++    rows = post_rank(folder / RANKS_CSV)
++    for row in rows:
++        if row["rank"] != row["jev_rank"]:
++            print(f"{row['filename']}: {row['jev_rank']} -> {row['rank']} ({row['confidence']:.2f})")
++    counts = {}
++    for row in rows:
++        counts[row["rank"]] = counts.get(row["rank"], 0) + 1
++    print(f"{len(rows)} letters after post-ranking: {counts}")
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/backup/claude-2026-10-23/letter_builder/rank_letters.py b/letter_builder/rank_letters.py
+new file mode 100644
+index 0000000..9adf347
+--- /dev/null
++++ b/letter_builder/rank_letters.py
+@@ -0,0 +1,108 @@
++"""python -m letter_builder.rank_letters [--folder DIR] [--out FILE] [--config config.yaml]
++
++Asks TypeSafe's Jev to rank each <name>.txt in the folder (default:
++config.yaml's letters-folder) as an excellent, good or normal recommendation
++letter, one `choice` question per letter, and writes filename,rank,confidence
++to --out (default <folder>/letter_ranks.csv) once every letter is ranked.
++Model, API URL and the API key's environment variable come from config.yaml's
++category-builder: jev: section.
++"""
++
++from __future__ import annotations
++
++import argparse
++import csv
++import os
++import sys
++from pathlib import Path
++
++from jev_category.builder import DEFAULTS
++from jev_category.client import JevClient, JevError
++from letter_builder import RANKS_CSV, letters_folder, load_raw
++
++INSTRUCTIONS = "How strong a recommendation is this letter for the student it is about?"
++CRITERIA = {
++    "excellent": "The writer gives an exceptional, unreserved endorsement backed by specific evidence: "
++                 "ranks the student among the very best they have known, with concrete achievements.",
++    "good": "A clearly positive, supportive endorsement with some specific evidence, "
++            "but without placing the student at the very top.",
++    "normal": "A routine or lukewarm letter: generic praise, little specific evidence, "
++              "or confirms facts more than it recommends.",
++}
++FIELDS = ["filename", "rank", "confidence"]
++
++
++def jev_client(raw: dict) -> JevClient:
++    """A client from config.yaml's jev settings; JevError when the API key is not set."""
++    jev_cfg = {**DEFAULTS, **((raw.get("category-builder") or {}).get("jev") or {})}
++    api_key = os.environ.get(jev_cfg["api-key-env"])
++    if not api_key:
++        raise JevError(f"set the API key in the {jev_cfg['api-key-env']} environment variable")
++    return JevClient(jev_cfg["api-url"], jev_cfg["model"], api_key)
++
++
++def rank(client: JevClient, letter: str) -> tuple[str, float]:
++    """(excellent|good|normal, Jev's confidence)."""
++    body = {"model": client.model, "state": {"letter": letter},
++            "questions": {"rank": {"type": "choice", "instructions": INSTRUCTIONS, "criteria": CRITERIA}}}
++    answer = (client._post(body).get("answers") or {}).get("rank") or {}
++    if answer.get("choice") not in CRITERIA:
++        raise JevError(f"unexpected answer: {answer}")
++    return answer["choice"], float(answer.get("confidence") or 0)
++
++
++def read_ranks(path: Path) -> dict[str, dict]:
++    """{filename: row} from a ranks CSV; empty when there is none yet."""
++    if not path.is_file():
++        return {}
++    with path.open(newline="", encoding="utf-8") as fh:
++        return {row["filename"]: row for row in csv.DictReader(fh) if row.get("filename")}
++
++
++def write_ranks(path: Path, ranks: list[tuple[str, str, float]]) -> None:
++    with path.open("w", newline="", encoding="utf-8") as fh:
++        writer = csv.writer(fh)
++        writer.writerow(FIELDS)
++        writer.writerows((name, choice, f"{confidence:.3f}") for name, choice, confidence in ranks)
++
++
++def merge_ranks(path: Path, ranks: list[tuple[str, str, float]]) -> None:
++    """Add ``ranks`` to the CSV, replacing rows with the same filename."""
++    rows = {name: (name, row["rank"], float(row.get("confidence") or 0))
++            for name, row in read_ranks(path).items()}
++    rows.update({name: (name, choice, confidence) for name, choice, confidence in ranks})
++    write_ranks(path, sorted(rows.values()))
++
++
++def main(argv=None) -> int:
++    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
++    parser.add_argument("--folder", type=Path)
++    parser.add_argument("--out", type=Path, help=f"default: <folder>/{RANKS_CSV}")
++    parser.add_argument("--config", type=Path, default=Path("config.yaml"))
++    args = parser.parse_args(argv)
++    raw = load_raw(args.config)
++    folder = (args.folder or letters_folder(raw)).expanduser()
++    out = (args.out or folder / RANKS_CSV).expanduser()
++    try:
++        client = jev_client(raw)
++    except JevError as exc:
++        raise SystemExit(str(exc))
++
++    ranks = []
++    for txt in sorted(folder.glob("*.txt")):
++        try:
++            choice, confidence = rank(client, txt.read_text(encoding="utf-8"))
++        except (JevError, OSError) as exc:
++            print(f"failed: {txt.name}: {exc}", file=sys.stderr)
++            choice, confidence = "error", 0.0
++        print(f"{txt.name}: {choice} ({confidence:.2f})")
++        ranks.append((txt.name, choice, confidence))
++
++    write_ranks(out, ranks)
++    counts = {c: sum(1 for _, r, _ in ranks if r == c) for c in (*CRITERIA, "error")}
++    print(f"wrote {len(ranks)} ranks to {out}: {counts}")
++    return 1 if counts["error"] else 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/backup/claude-2026-10-23/letter_builder/students.py b/letter_builder/students.py
+new file mode 100644
+index 0000000..3b9c4ca
+--- /dev/null
++++ b/letter_builder/students.py
+@@ -0,0 +1,86 @@
++"""One record per student: transcript, recommendation letters and their ranks.
++
++A transcript is <student>.pdf (in pdf-folder) and a letter is
++<student>_letter<N>.pdf (in letters-folder), so the student key is the
++transcript's name without its suffix, and the letter's name without
++``_letter<N>`` and its suffix.
++"""
++
++from __future__ import annotations
++
++import re
++from collections.abc import Iterable, Mapping
++from pathlib import Path
++
++from letter_builder import RANKS_CSV
++from letter_builder.post_rank import post_rank
++
++LETTER_SUFFIX = re.compile(r"_letter\d*$", re.IGNORECASE)
++GROUP_RANKS = ["very excellent", "excellent", "very good", "good", "normal"]
++
++
++def student_key(letter_name: str | Path) -> str:
++    """adam_flores_letter2.pdf -> adam_flores; a name without _letter keeps its stem."""
++    return LETTER_SUFFIX.sub("", Path(letter_name).stem)
++
++
++def letter_ranks(folder: Path) -> dict[str, str]:
++    """{letter stem: rank after post_rank} from <folder>/letter_ranks.csv."""
++    return {Path(row["filename"]).stem: row["rank"] for row in post_rank(folder / RANKS_CSV)}
++
++
++def group_rank(ranks: Iterable[str | None]) -> str | None:
++    """A student's rank from their letters' (post_rank) ranks; unranked letters are ignored.
++
++    very excellent: every letter excellent
++    excellent:      at least one excellent, the rest good
++    very good:      every letter good
++    good:           at least one good (or excellent beside a normal one)
++    normal:         every letter normal
++    None when no letter is ranked yet.
++    """
++    ranks = [r for r in ranks if r]
++    if not ranks:
++        return None
++    kinds = set(ranks)
++    if kinds == {"excellent"}:
++        return "very excellent"
++    if kinds == {"excellent", "good"}:
++        return "excellent"
++    if kinds == {"good"}:
++        return "very good"
++    if kinds & {"excellent", "good"}:
++        return "good"
++    return "normal"
++
++
++def student_info(transcript_names: Iterable[str | Path], letter_names: Iterable[str | Path],
++                 ranks: Mapping[str, str] | None = None) -> list[dict]:
++    """One record per student, sorted by student:
++
++        {"student": "adam_flores", "transcript": "adam_flores.pdf",
++         "letters": [{"file": "adam_flores_letter1.pdf", "rank": "good"}, ...],
++         "group_rank": "very good"}
++
++    ``ranks`` maps a letter's stem (adam_flores_letter1) to its rank, e.g.
++    letter_ranks(letters_folder); a letter missing from it has rank None.
++    Every student with a transcript or a letter gets a record: no letters is an
++    empty list, no transcript is None.  Names keep only their final part.
++    """
++    ranks = ranks or {}
++    records: dict[str, dict] = {}
++
++    def record(student: str) -> dict:
++        return records.setdefault(student, {"student": student, "transcript": None,
++                                            "letters": [], "group_rank": None})
++
++    for name in transcript_names:
++        name = Path(name).name
++        record(Path(name).stem)["transcript"] = name
++    for name in letter_names:
++        name = Path(name).name
++        record(student_key(name))["letters"].append({"file": name, "rank": ranks.get(Path(name).stem)})
++    for rec in records.values():
++        rec["letters"].sort(key=lambda letter: letter["file"])
++        rec["group_rank"] = group_rank(letter["rank"] for letter in rec["letters"])
++    return [records[s] for s in sorted(records)]

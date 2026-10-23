@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}Browser View{% endblock %}</title>
+<title>{% block title %}Transcripts and Recommendation Letters{% endblock %}</title>
 <style>
   :root {
     --bg: #ffffff; --fg: #1a1c1e; --muted: #5c6269; --line: #d8dce0;
@@ -15,16 +15,15 @@
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; padding: 0 1rem 2rem; background: var(--bg); color: var(--fg);
+    margin: 0; background: var(--bg); color: var(--fg);
     font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   }
   main { max-width: 68rem; margin: 0 auto; }
   h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
   h2 { font-size: 1.1rem; margin: 2rem 0 .6rem; }
   h3 { font-size: .95rem; margin: 1.4rem 0 .4rem; }
-  p.sub { color: var(--muted); margin: 0 0 1.5rem; }
   a { color: var(--accent); }
-  fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 1rem 1.1rem; margin: 0 0 1.1rem; }
+  fieldset { min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 1rem 1.1rem; margin: 0 0 1.1rem; }
   legend { padding: 0 .4rem; font-weight: 600; font-size: .9rem; }
   label { display: block; margin: .55rem 0 .2rem; font-size: .88rem; color: var(--muted); }
   input[type=text], input[type=number], input[type=file], select {
@@ -60,13 +59,22 @@
     position: sticky; top: 0; z-index: 10; background: var(--bg);
     padding-top: 2rem; margin: 0 0 1.5rem;
   }
-  nav.tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--line); }
-  nav.tabs a {
-    padding: .55rem 1.1rem; color: var(--muted); text-decoration: none; font-weight: 600;
-    border-bottom: 2px solid transparent; margin-bottom: -1px;
+  /* Left bar: the page list, pinned while the page scrolls. */
+  .layout { display: flex; min-height: 100vh; }
+  nav.side {
+    position: sticky; top: 0; align-self: flex-start; flex: 0 0 11rem; height: 100vh;
+    display: flex; flex-direction: column; gap: .2rem; padding: 2rem .6rem 1rem;
+    background: var(--panel); border-right: 1px solid var(--line);
   }
-  nav.tabs a:hover { color: var(--fg); }
-  nav.tabs a.active { color: var(--accent); border-bottom-color: var(--accent); }
+  nav.side a {
+    padding: .5rem .8rem; border-radius: 6px; color: var(--muted); text-decoration: none; font-weight: 600;
+  }
+  nav.side a.sub + .group { margin-top: .8rem; }
+  nav.side .group { padding: .5rem .8rem; color: var(--fg); font-weight: 600; }
+  nav.side a.sub { margin-left: .9rem; padding: .35rem .8rem; font-size: .88rem; font-weight: 500; }
+  nav.side a:hover { color: var(--fg); background: var(--bg); }
+  nav.side a.active { color: var(--accent); background: var(--bg); box-shadow: inset 3px 0 var(--accent); }
+  .layout > main { flex: 1; min-width: 0; padding: 0 1rem 2rem; }
   button:disabled { opacity: .6; cursor: progress; }
   .status { margin: 1.4rem 0 0; }
   .status .ok { border-left: 3px solid #1a7f37; }
@@ -122,6 +130,15 @@
   .dialog-body {
     flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
   }
+  .dialog-body[hidden] { display: none; }
+  /* The student dialog's Transcript / Recommendation letters tabs. */
+  .dialog-tabs { display: flex; gap: .25rem; padding: 0 1.2rem; border-bottom: 1px solid var(--line); }
+  .dialog-tabs button {
+    background: none; color: var(--muted); border-radius: 0; padding: .55rem 1rem;
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .dialog-tabs button:hover { color: var(--fg); }
+  .dialog-tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
   .dialog-body > section { min-height: 0; display: flex; flex-direction: column; padding: .8rem 1.2rem 1.2rem; }
   .dialog-body > section + section { border-left: 1px solid var(--line); }
   .pdf-pane iframe { flex: 1; width: 100%; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
@@ -139,14 +156,17 @@
   }
   /* Upload tab: upload form on the left, categories on the right. */
   .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
+  .split.single { grid-template-columns: minmax(0, 1fr); }
   .split > section > h2:first-child { margin-top: 0; }
+  .split h2 a { color: inherit; text-decoration: none; }
+  .split h2 a:hover { color: var(--accent); }
   /* Each panel scrolls on its own; --split-top is measured in upload.html. */
   .split > section {
     height: calc(100vh - var(--split-top, 10rem) - 2rem); overflow-y: auto;
     overscroll-behavior: contain; padding-right: .4rem;
   }
-  .category-bar { display: flex; gap: .5rem; align-items: center; }
-  .category-bar select { flex: 1; width: auto; }
+  .category-bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+  .category-bar select { flex: 1 1 4rem; width: auto; min-width: 0; }
   .category-bar select.builder { flex: 0 0 auto; }
   .category-bar label { margin: 0; color: var(--fg); font-weight: 600; }
   .category-bar label + button { margin-left: auto; }
@@ -166,16 +186,35 @@
     .split { grid-template-columns: 1fr; }
     .split > section { height: auto; overflow: visible; padding-right: 0; }
   }
-  @media (max-width: 640px) { header.top { padding-top: 1.2rem; } }
+  @media (max-width: 640px) {
+    header.top { padding-top: 1.2rem; }
+    .layout { display: block; }
+    nav.side {
+      position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; padding: .5rem 1rem;
+      border-right: 0; border-bottom: 1px solid var(--line);
+    }
+    nav.side a.sub { margin-left: 0; }
+    nav.side a.sub + .group { margin-top: 0; margin-left: .6rem; }
+  }
 </style>
-<main>
-  <header class="top">
-    <h1>Browser View</h1>
-    <p class="sub">Browse category rankings written by llm_category.</p>
-    <nav class="tabs">
-      <a href="/" {% if tab == "upload" %}class="active" aria-current="page"{% endif %}>Upload</a>
-      <a href="/view" {% if tab == "view" %}class="active" aria-current="page"{% endif %}>View</a>
-    </nav>
-  </header>
-  {% block body %}{% endblock %}
-</main>
+<div class="layout">
+  {% macro navlink(href, key, label) -%}
+    {% if tab == key %}<a href="{{ href }}" class="sub active" aria-current="page">{{ label }}</a>
+    {%- else %}<a href="{{ href }}" class="sub">{{ label }}</a>{% endif %}
+  {%- endmacro %}
+  <nav class="side" aria-label="Pages">
+    <span class="group">Transcripts</span>
+    {{ navlink("/transcripts/ftp-upload", "ftp-upload", "FTP Upload") }}
+    {{ navlink("/transcripts/category-build", "category-build", "Category Build") }}
+    {{ navlink("/view", "view", "View") }}
+    <span class="group">Recommendations</span>
+    {{ navlink("/letters/ftp-upload", "letters-upload", "FTP Upload") }}
+    {{ navlink("/letters/view", "letters-view", "View") }}
+  </nav>
+  <main>
+    <header class="top">
+      <h1>Transcripts and Recommendation Letters</h1>
+    </header>
+    {% block body %}{% endblock %}
+  </main>
+</div>

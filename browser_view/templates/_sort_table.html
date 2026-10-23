@@ -1,0 +1,43 @@
+{# Click-to-sort tables, shared by Transcripts → View and Recommendations → View.
+   sortableTable(table) wires each header's button.sort and returns sortBy(index).
+   A column with data-type="num" sorts by its cells' data-sort; others by text. #}
+<script>
+window.sortableTable = (table) => {
+  const headers = [...table.tHead.rows[0].cells];
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+  function sortBy(index) {
+    const th = headers[index];
+    const numeric = th.dataset.type === "num";
+    // First click: numbers high-to-low, text A-Z; then toggle.
+    const current = th.getAttribute("aria-sort");
+    const direction = current
+      ? (current === "ascending" ? "descending" : "ascending")
+      : (numeric ? "descending" : "ascending");
+    const sign = direction === "ascending" ? 1 : -1;
+
+    const key = (row) => {
+      const cell = row.cells[index];
+      return numeric ? cell.dataset.sort : cell.textContent.trim();
+    };
+    const body = table.tBodies[0];
+    const rows = [...body.rows];
+    rows.sort((a, b) => {
+      const x = key(a), y = key(b);
+      // Blanks sort last whichever way the column runs.
+      if (x === "" || y === "") return (x === "") - (y === "");
+      const order = numeric ? Number(x) - Number(y) : collator.compare(x, y);
+      return sign * order || Number(a.dataset.index) - Number(b.dataset.index);
+    });
+    body.append(...rows);
+
+    headers.forEach((h) => h.removeAttribute("aria-sort"));
+    th.setAttribute("aria-sort", direction);
+  }
+
+  headers.forEach((th, index) => {
+    th.querySelector("button.sort").addEventListener("click", () => sortBy(index));
+  });
+  return sortBy;
+};
+</script>

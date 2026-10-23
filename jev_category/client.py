@@ -65,6 +65,11 @@ class JevClient:
                 raise JevError(f"HTTP {exc.code}: {_detail(exc)}") from None
         raise AssertionError("unreachable")
 
+    def answers(self, state, questions: dict) -> dict:
+        """Jev's answer to each of ``questions`` (any question types) about ``state``, by name."""
+        reply = self._post({"model": self.model, "state": state, "questions": questions})
+        return reply.get("answers") or {}
+
     def scores(self, category: str, definition: str,
                courses: list[tuple[str, str]]) -> tuple[list[float], dict]:
         """(one 0-1 score per course, in order; the response's token usage)."""

@@ -36,6 +36,7 @@ import category_builder
 from category_builder import definer
 from category_builder.common import RunError, courses_csv_name
 from category_builder.definitions import Definitions
+from letter_builder import RANKS_CSV, letters_folder, rank_letters, students as letter_students
 from out_builder import publish
 from upload.convert import add_tool_folders, pdf_to_common_json
 
@@ -167,12 +168,8 @@ CATEGORY_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,39}$")
 CATEGORY_NAME_RULE = "use letters, digits and _, starting with a letter (at most 40)"
 
 
-class CategoryJob:
-    """The one background builder run the Upload tab can start, then its publish.
-
-    One at a time across all builders: Ollama answers one question at a time,
-    so a second run would only queue behind the first.
-    """
+class BackgroundJob:
+    """One background run at a time, and the state the page polls while it runs."""
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -185,19 +182,37 @@ class CategoryJob:
             state["elapsed"] = round((state.get("finished") or time.time()) - state["started"])
         return state
 
-    def start(self, raw: dict, builder: str, cfg: dict, category: str) -> bool:
-        """Run ``builder`` (its load_config result is ``cfg``), then publish to out-folder."""
+    def _start(self, args: tuple, **state) -> bool:
+        """Run ``self._run(*args)`` in a thread, unless a run is already going."""
         with self.lock:
             if self.state.get("status") == "running":
                 return False
-            self.state = {"status": "running", "builder": builder, "category": category,
-                          "done": 0, "total": None, "started": time.time()}
-        threading.Thread(target=self._run, args=(raw, builder, cfg, category), daemon=True).start()
+            self.state = {"status": "running", **state, "started": time.time()}
+        threading.Thread(target=self._run, args=args, daemon=True).start()
         return True
 
-    def _progress(self, done: int, total: int) -> None:
+    def _update(self, **changes) -> None:
         with self.lock:
-            self.state.update(done=done, total=total)
+            self.state.update(changes)
+
+    def _finish(self, **changes) -> None:
+        self._update(**changes, finished=time.time())
+
+
+class CategoryJob(BackgroundJob):
+    """The one background builder run the Upload tab can start, then its publish.
+
+    One at a time across all builders: Ollama answers one question at a time,
+    so a second run would only queue behind the first.
+    """
+
+    def start(self, raw: dict, builder: str, cfg: dict, category: str) -> bool:
+        """Run ``builder`` (its load_config result is ``cfg``), then publish to out-folder."""
+        return self._start((raw, builder, cfg, category), builder=builder, category=category,
+                           done=0, total=None)
+
+    def _progress(self, done: int, total: int) -> None:
+        self._update(done=done, total=total)
 
     def _run(self, raw: dict, builder: str, cfg: dict, category: str) -> None:
         try:
@@ -205,13 +220,108 @@ class CategoryJob:
             published = publish(raw, builder, category)
         except Exception as exc:  # shown on the page; the thread must not die silently
             log.exception("%s run of %s failed", builder, category)
-            update = {"status": "error", "error": str(exc)}
+            self._finish(status="error", error=str(exc))
         else:
             log.info("%s run of %s done; published %s", builder, category, published)
-            update = {"status": "done", "folder": str(gpa_csv.parent),
-                      "published": str(published)}
+            self._finish(status="done", folder=str(gpa_csv.parent), published=str(published))
+
+
+class LetterJob(BackgroundJob):
+    """The one background run that converts recommendation letters and ranks them.
+
+    Each Jev call takes about a second, so a folder of letters takes minutes;
+    the FTP Upload page polls /letters/status meanwhile.  The ranks are merged
+    into <letters-folder>/letter_ranks.csv when the run ends.
+    """
+
+    def start(self, client, pdfs: list[Path], ranks_csv: Path, skipped: list[str]) -> bool:
+        return self._start((client, pdfs, ranks_csv), done=0, total=len(pdfs), skipped=skipped)
+
+    def _step(self) -> None:
         with self.lock:
-            self.state.update(update, finished=time.time())
+            self.state["done"] += 1
+
+    def _run(self, client, pdfs: list[Path], ranks_csv: Path) -> None:
+        try:
+            ranks, failures = rank_letters.rank_pdfs(client, pdfs, progress=self._step)
+            if ranks:
+                rank_letters.merge_ranks(ranks_csv, ranks)
+        except Exception as exc:  # shown on the page; the thread must not die silently
+            log.exception("letter ranking failed")
+            self._finish(status="error", error=str(exc), failures=[])
+            return
+        for failure in failures:
+            log.error("letter %s: %s", failure["file"], failure["error"])
+        log.info("letters: ranked %d of %d into %s", len(ranks), len(pdfs), ranks_csv)
+        self._finish(status="done" if ranks else "error", ranked=len(ranks), failures=failures,
+                     error=None if ranks else "no letter could be ranked")
+
+
+def _student_name(file: str) -> str:
+    """adam_flores.pdf -> Adam Flores."""
+    return Path(file).stem.replace("_", " ").title()
+
+
+def _transcript_names(cfg: dict) -> list[str]:
+    """Every transcript PDF's name, from work-folder and pdf-folder (as _find_pdf looks)."""
+    names = set()
+    for key in ("work-folder", "pdf-folder"):
+        if cfg.get(key):
+            names.update(p.name for p in Path(cfg[key]).expanduser().glob("*.pdf"))
+    return sorted(names)
+
+
+def _letter_records(cfg: dict, transcripts: list[str]) -> tuple[list[dict], str | None]:
+    """(student_info records for ``transcripts`` and every letter in letters-folder,
+    an error message when the letters could not be read)."""
+    folder = letters_folder(cfg)
+    try:
+        return letter_students.folder_info(folder, transcripts), None
+    except (OSError, ValueError, KeyError, csv.Error) as exc:
+        log.error("letters from %s: %s", folder, exc)
+        return letter_students.student_info(transcripts, []), f"could not read the letters in {folder}: {exc}"
+
+
+def _letter_students(cfg: dict, names: dict[str, str]) -> tuple[list[dict], str | None]:
+    """Recommendations → View rows, one per student with letters, and any read error.
+
+    ``names`` maps a transcript file to the student's name from category results;
+    a student not in it is named after their file."""
+    records, error = _letter_records(cfg, _transcript_names(cfg))
+    return [{"student": names.get(r["transcript"]) or _student_name(r["student"]),
+             "file": r["transcript"] or f"{r['student']}.pdf",
+             "has_transcript": r["transcript"] is not None,
+             "letters": len(r["letters"]), "group_rank": r["group_rank"],
+             "rank_order": letter_students.group_rank_order(r["group_rank"])}
+            for r in records if r["letters"]], error
+
+
+def _add_letter_ranks(students: list[dict], cfg: dict) -> None:
+    """Set each student's ``letter_rank`` (student_info's group_rank of their
+    recommendation letters, matched by file name) and its ``letter_rank_order``."""
+    records, _ = _letter_records(cfg, [s["file"] for s in students if s["file"]])
+    by_transcript = {r["transcript"]: r["group_rank"] for r in records if r["transcript"]}
+    for s in students:
+        s["letter_rank"] = by_transcript.get(s["file"])
+        s["letter_rank_order"] = letter_students.group_rank_order(s["letter_rank"])
+
+
+def _dev_mode(cfg: dict) -> bool:
+    """config.yaml's run_mode is dev: the UI also shows what is otherwise hidden."""
+    return str(cfg.get("run_mode") or "").strip().lower() == "dev"
+
+
+def _student_letters(transcript: str, cfg: dict) -> dict:
+    """{"letters": [{file, rank, pdf_url}], "letter_rank": group rank} for one
+    student.  In dev run_mode each letter also has Jev's own rank (``jev_rank``)
+    and its ``confidence``."""
+    records, _ = _letter_records(cfg, [transcript])
+    record = next(r for r in records if r["transcript"] == transcript)
+    hidden = () if _dev_mode(cfg) else ("jev_rank", "confidence")
+    letters = [{**{k: v for k, v in letter.items() if k not in hidden},
+                "pdf_url": f"/letters/pdf?{urlencode({'file': letter['file']})}"}
+               for letter in record["letters"]]
+    return {"letter_rank": record["group_rank"], "letters": letters}
 
 
 def create_app(config_path: Path | None = None) -> Flask:
@@ -220,10 +330,12 @@ def create_app(config_path: Path | None = None) -> Flask:
     config_path = Path(config_path or PROJECT_ROOT / "config.yaml")
     add_tool_folders(_load_config(config_path).get("tool-folders"))
 
-    @app.get("/")
-    def upload():
+    # The Transcripts page shows both panels; each sub-item shows one of them.
+    @app.get("/", defaults={"panel": None})
+    @app.get("/transcripts/<any('ftp-upload', 'category-build'):panel>")
+    def upload(panel):
         cfg = _load_config(config_path)
-        return render_template("upload.html", tab="upload",
+        return render_template("upload.html", tab=panel,
                                pdf_folder=cfg.get("pdf-folder") or "",
                                work_folder=cfg.get("work-folder") or "")
 
@@ -406,6 +518,8 @@ def create_app(config_path: Path | None = None) -> Flask:
                 students = _read_students(available[selected], selected)
             except (OSError, ValueError, csv.Error) as exc:
                 error = f"could not read {available[selected].name}: {exc}"
+            else:
+                _add_letter_ranks(students, cfg)
         else:
             error = f"the {builder} builder has no results (*_gpa.csv) in {folder} yet"
 
@@ -422,40 +536,42 @@ def create_app(config_path: Path | None = None) -> Flask:
             error=error,
         )
 
-    @app.get("/view/courses")
-    def view_courses():
-        """One student's courses, for the View tab's dialog."""
+    @app.get("/view/student")
+    def student_detail():
+        """One student's details for the student dialog: the transcript's PDF, its
+        courses when a category is given, and the recommendation letters with
+        their post_rank ranks."""
         cfg = _load_config(config_path)
-        try:
-            builder, folder = _builder_folder(cfg, request.args.get("builder"))
-        except (category_builder.UnknownBuilder, KeyError) as exc:
-            return jsonify(error=str(exc).strip("'\"")), 404
-        category = (request.args.get("category") or "").upper()
-        available = _built_categories(folder)
-        if category not in available:
-            return jsonify(error=f"no {category or 'category'} results from {builder}"), 404
-
         name = _bare_pdf_name(request.args.get("file"))
-        try:
-            students = _read_students(available[category], category)
-            record = next((r for r in students if r["file"] == name), None)
-            if not name or record is None:
-                return jsonify(error=f"{name or 'that student'} is not in these results"), 404
+        if not name:
+            return jsonify(error="that student is not known"), 404
+        detail = {"student": _student_name(name), "file": name, "courses": None}
 
-            courses_csv = folder / courses_csv_name(category)
-            if not courses_csv.is_file():
-                return jsonify(error=f"no course list for {name} in {folder}"), 404
-            courses = _courses_from_csv(courses_csv, category, name)
-        except (OSError, ValueError, csv.Error) as exc:
-            return jsonify(error=f"could not read courses: {exc}"), 500
+        if request.args.get("category"):
+            try:
+                builder, folder = _builder_folder(cfg, request.args.get("builder"))
+            except (category_builder.UnknownBuilder, KeyError) as exc:
+                return jsonify(error=str(exc).strip("'\"")), 404
+            category = request.args["category"].upper()
+            available = _built_categories(folder)
+            if category not in available:
+                return jsonify(error=f"no {category} results from {builder}"), 404
+            try:
+                students = _read_students(available[category], category)
+                record = next((r for r in students if r["file"] == name), None)
+                if record is None:
+                    return jsonify(error=f"{name} is not in these results"), 404
+                courses_csv = folder / courses_csv_name(category)
+                if not courses_csv.is_file():
+                    return jsonify(error=f"no course list for {name} in {folder}"), 404
+                courses = _courses_from_csv(courses_csv, category, name)
+            except (OSError, ValueError, csv.Error) as exc:
+                return jsonify(error=f"could not read courses: {exc}"), 500
+            detail.update(record, courses=courses, credit_label="Credits")
 
         pdf = _find_pdf(name, cfg)
-        return jsonify({
-            **record,
-            "courses": courses,
-            "credit_label": "Credits",
-            "pdf_url": f"/view/pdf?{urlencode({'file': name})}" if pdf else None,
-        })
+        detail["pdf_url"] = f"/view/pdf?{urlencode({'file': name})}" if pdf else None
+        return jsonify({**detail, **_student_letters(name, cfg)})
 
     @app.get("/view/pdf")
     def view_pdf():
@@ -464,6 +580,90 @@ def create_app(config_path: Path | None = None) -> Flask:
         if pdf is None:
             abort(404)
         # Inline, so the browser's own PDF viewer shows it inside the dialog.
+        return send_file(pdf, mimetype="application/pdf")
+
+    letter_job = LetterJob()
+
+    @app.get("/letters/ftp-upload")
+    def letters_upload():
+        folder = letters_folder(_load_config(config_path))
+        return render_template("letters_upload.html", tab="letters-upload", folder=folder)
+
+    @app.post("/letters/upload")
+    def run_letters_upload():
+        """Save the uploaded letters (else take every PDF in letters-folder), then
+        convert and rank them in the background; /letters/status reports progress.
+
+        A letter with a <name>.txt was uploaded before: it is skipped, not replaced."""
+        cfg = _load_config(config_path)
+        folder = letters_folder(cfg)
+        try:
+            client = rank_letters.jev_client(cfg)
+            folder.mkdir(parents=True, exist_ok=True)
+            done = {p.stem for p in folder.glob("*.txt")}
+            uploads = [f for f in request.files.getlist("pdfs") if f and f.filename]
+            pdfs, skipped = [], []
+            if uploads:
+                names = [Path(u.filename).name for u in uploads]  # never trust a client path
+                bad = [n for n in names if not n.lower().endswith(".pdf")]
+                if bad:
+                    raise ValueError(f"not a PDF: {bad[0]}")
+                state = letter_job.snapshot()
+                if state["status"] == "running":  # its letters must not change under it
+                    return jsonify(error="letters are already being ranked", **state), 409
+                for upload, name in zip(uploads, names):
+                    if Path(name).stem in done:
+                        skipped.append(name)
+                    elif folder / name not in pdfs:
+                        upload.save(folder / name)
+                        pdfs.append(folder / name)
+            else:
+                found = sorted(p for p in folder.glob("*.pdf") if p.is_file())
+                if not found:
+                    raise ValueError(f"no PDFs found in {folder}")
+                pdfs = [p for p in found if p.stem not in done]
+                skipped = [p.name for p in found if p.stem in done]
+        except (RunError, OSError, ValueError) as exc:
+            return jsonify(error=str(exc)), 400
+        if not pdfs:
+            return jsonify(status="skipped", skipped=skipped)
+        if not letter_job.start(client, sorted(pdfs), folder / RANKS_CSV, sorted(skipped)):
+            return jsonify(error="letters are already being ranked", **letter_job.snapshot()), 409
+        log.info("letters: ranking %d PDF(s) in %s", len(pdfs), folder)
+        return jsonify(letter_job.snapshot())
+
+    @app.get("/letters/status")
+    def letters_status():
+        return jsonify(letter_job.snapshot())
+
+    @app.get("/letters/view")
+    def letters_view():
+        cfg = _load_config(config_path)
+        folder = letters_folder(cfg)
+        # The dialog shows the transcript's courses from the active builder's first
+        # category; its results also give the students' full names.
+        names = {}
+        try:
+            builder, built = _builder_folder(cfg, None)
+            available = _built_categories(built)
+            category = next(iter(available), "")
+            if category:
+                names = {r["file"]: r["student"] for r in _read_students(available[category], category)}
+        except (category_builder.UnknownBuilder, KeyError, OSError, ValueError, csv.Error):
+            builder, category = "", ""
+        rows, error = _letter_students(cfg, names)
+        if not rows and not error:
+            error = f"no recommendation letters in {folder} yet"
+        return render_template("letters_view.html", tab="letters-view", folder=folder,
+                               students=rows, group_ranks=letter_students.GROUP_RANKS,
+                               builder=builder, category=category, error=error)
+
+    @app.get("/letters/pdf")
+    def letters_pdf():
+        name = _bare_pdf_name(request.args.get("file"))
+        pdf = letters_folder(_load_config(config_path)) / name if name else None
+        if pdf is None or not pdf.is_file():
+            abort(404)
         return send_file(pdf, mimetype="application/pdf")
 
     @app.get("/favicon.ico")

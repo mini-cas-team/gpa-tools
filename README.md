@@ -63,7 +63,9 @@ pdf-folder: /home/personal/Templates/transcripts   # PDFs to convert
 work-folder: /home/personal/Templates/work         # .txt, .common.json, uploaded PDFs; <builder>/ folders
 out-folder: /home/personal/Templates/out           # published <cat>_gpa.csv, for other applications
 log-folder: /home/personal/Templates/log           # upload, llm_category, jev_category, category_definer, browser_view .log
+letters-folder: /home/personal/Templates/letters   # recommendation letter PDFs, their .txt and letter_ranks.csv
 min-category-courses: 4      # View tab: hide students with fewer category courses
+run_mode: dev                # dev: the student dialog's letters tab also shows Jev's rank and confidence
 
 active-category-builder: jev # the default in the Upload and View tabs and the CLI
 category-builder:            # one section per builder
@@ -250,6 +252,11 @@ publishes only with `--publish` or this command.
 | `--host` / `--port` | bind address, default `127.0.0.1:5001` |
 | `--debug` | Flask reloader and tracebacks |
 
+A left bar lists the pages in two groups. **Transcripts**: *FTP Upload* (the
+Upload panel below), *Category Build* (the Categories panel) and *View*.
+**Recommendations**: *FTP Upload* and *View* for letters. `/` still shows both
+transcript panels side by side.
+
 **Upload tab.** Two panels, each with its own scroll bar.
 
 - *Left, Upload:* choose PDFs to upload, or leave it empty to convert the whole
@@ -279,8 +286,42 @@ publishes only with `--publish` or this command.
 `<work-folder>/<builder>/<cat>_gpa.csv` and shows every student. Click a column
 name to sort (it opens sorted by category GPA). **Min courses** hides students
 with fewer category courses (default `min-category-courses`). **Reload**
-re-reads the folder, e.g. after a command-line run. Click a student to see
-their courses from `<cat>_courses.csv` next to the transcript PDF.
+re-reads the folder, e.g. after a command-line run. Click a student to open
+their details in two tabs: *Transcript*, their courses from `<cat>_courses.csv`
+next to the transcript PDF, and *Recommendation letters*, each letter with its
+post_rank rank next to the selected letter's PDF.
+**Recommend letter** is the student's group rank from their recommendation
+letters (`letter_builder/students.py`, `student_info`): letters
+`<student>_letter<N>.pdf` in `letters-folder` match transcript `<student>.pdf`,
+and their post_rank ranks combine into very excellent, excellent, very good,
+good or normal; `–` when the student has no ranked letters.
+
+**Recommendations, FTP Upload.** Choose letter PDFs, or leave it empty to take
+every PDF in `letters-folder`. A letter whose `<name>.txt` is already there was
+uploaded before and is skipped (not saved, not ranked again). New ones are
+saved there; then, in the background with a progress bar, each becomes `<name>.txt` and Jev ranks it
+*excellent*, *good* or *normal* (one `choice` question per letter, using the
+`category-builder: jev:` model, URL and key). The ranks are merged into
+`<letters-folder>/letter_ranks.csv` (`filename,rank,confidence`), replacing
+rows for the same file. One run at a time.
+
+**Recommendations, View.** One row per student with letters in
+`letters-folder`: **Student**, the number of **Letters**, and the **Group rank**
+from `student_info` (`letter_builder/students.py`), which combines the
+student's letter ranks after `post_rank.py` (*good* below 0.7 becomes
+*normal*; *excellent* below 0.4 becomes *normal*, and below 0.7 *good*;
+`letter_ranks.csv` keeps Jev's own answers). Best group rank first; filter by
+**Group rank**, sort by column. The student's name links to the same student
+dialog as Transcripts → View, with the transcript's courses from the active
+builder's first category.
+
+The same steps run from the command line:
+
+```bash
+.venv312/bin/python -m letter_builder.pdf2txt        # every PDF in letters-folder -> .txt
+.venv312/bin/python -m letter_builder.rank_letters   # every .txt -> letter_ranks.csv (rewritten)
+.venv312/bin/python -m letter_builder.post_rank      # print the adjusted ranks
+```
 
 **This is a localhost tool for one operator.** It serves files from the
 configured folders, and Flask's development server is what `--host` binds;
@@ -311,7 +352,8 @@ jev_category/     the jev builder (python -m jev_category)
   client.py       TypeSafe API client
   store.py        score cache
 out_builder/      publish <cat>_gpa.csv to out-folder (python -m out_builder)
-browser_view/     Flask UI: Upload and View tabs (python -m browser_view)
+letter_builder/   recommendation letters: pdf2txt, then rank_letters with Jev
+browser_view/     Flask UI: transcript and letter pages (python -m browser_view)
 install/          per-user installer scripts (used by /install-gpa-tools)
 tests/
 ```
