@@ -31,7 +31,7 @@ report in plain text or JSON; this file says in what order and what to ask.
 | | Linux / macOS | Windows (Claude Code runs Git Bash) |
 |---|---|---|
 | any Python to start with | `python3` | `py` or `python` |
-| the venv's Python, `$PY` below | `.venv312/bin/python` | `.venv312/Scripts/python.exe` |
+| the venv's Python, `$PY` below | `.venv/bin/python` | `.venv/Scripts/python.exe` |
 
 On Windows, `python` can be the Microsoft Store stub, which runs nothing.
 `check.py` only lists interpreters that actually report a version.
@@ -55,32 +55,30 @@ is from an older version: tell the user which keys are outdated, then run
 configure.py with the model and URL they had there and delete the old keys
 once the user agrees.
 
-If no Python runs at all, do step 1b first and then run `check.py` with
-`uv run --python 3.12 install/check.py --text`.
+If no Python runs at all, install uv first (step 1) and then run `check.py` with
+`~/.local/bin/uv run --python 3.14 install/check.py --text`.
 
 ## Step 1 — Python venv and packages
 
-Skip this step if `venv exists` and `missing: nothing`.
+Skip this step if `venv exists` and `missing: nothing` (and the venv isn't
+`unsupported`). Otherwise follow the `/install-from-clone` skill
+(`.claude/skills/install-from-clone/SKILL.md`), which runs
+`install/setup_venv.py`. That script picks the Python: gpa-tools runs on 3.14 or
+3.12 (`check.py` `PYTHON_SUPPORTED`), 3.14 preferred, else uv fetches 3.14 for
+this user. In short:
 
-a. **Python 3.12 present** (`python3.12`, or `py -3.12` on Windows):
-   ```bash
-   python3.12 -m venv .venv312
-   $PY -m pip install -r requirements.txt pytest
-   ```
-   On Debian/Ubuntu, `venv` can fail with "ensurepip is not available".
-   That means the `python3.12-venv` apt package is missing, which needs admin.
-   Use b instead.
+```bash
+python3 install/setup_venv.py --dry-run     # the plan; changes nothing
+python3 install/setup_venv.py               # build .venv and install the packages
+```
 
-b. **No Python 3.12** (or a failed a): install `uv` for this user, and let it
-   fetch Python 3.12 for this user too:
-   ```bash
-   curl -LsSf https://astral.sh/uv/install.sh | sh                                     # Linux/macOS -> ~/.local/bin/uv
-   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"   # Windows
-   uv venv --python 3.12 .venv312
-   uv pip install --python .venv312 -r requirements.txt pytest
-   ```
-   A fresh `uv` isn't on PATH in the current shell yet. Call it by full
-   path: `~/.local/bin/uv`, or `~/.local/bin/uv.exe` on Windows.
+Exit 2 (`rebuild-needed`: the venv is an unsupported Python): **Ask**, then add
+`--rebuild`. Exit 3 (`no-python`): **Ask** before installing uv for this user
+(`curl -LsSf https://astral.sh/uv/install.sh | sh`, or on Windows
+`powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`),
+then run it again. A fresh uv isn't on PATH yet, but the script finds it in
+`~/.local/bin`. Show this plan as part of the step 0 plan and confirmation; don't
+ask again.
 
 ## Step 2 — pdftotext
 
@@ -103,14 +101,17 @@ b. **No Python 3.12** (or a failed a): install `uv` for this user, and let it
 ## Step 3 — folders and config.yaml
 
 **Ask** where the data should live. Offer the default `~/gpa-tools-data`, which
-gets the subfolders `transcripts/` (PDFs), `work/` (converted transcripts,
-and one `work/<builder>/` folder per category builder), `out/` (the published
-`<cat>_gpa.csv` files other applications read) and `log/`. Also ask
-whether they already have a folder of transcript PDFs to use as `pdf-folder`.
+becomes `input-folder` with one subfolder per component for the raw input,
+`transcripts/` (PDFs), `letters/` (letter PDFs) and `personal/` (`.profile`
+files), plus `work/` (everything made from the input, again one subfolder per
+component, and one `work/<builder>/` folder per category builder), `out/` (the
+published `<cat>_gpa.csv` files other applications read) and `log/`. Also ask
+whether they already have a folder holding `transcripts/`, `letters/` and
+`personal/` to use as `input-folder`.
 
 ```bash
 $PY install/configure.py --data ~/gpa-tools-data
-$PY install/configure.py --data ~/gpa-tools-data --pdf-folder "/path/to/their/pdfs"
+$PY install/configure.py --data ~/gpa-tools-data --input-folder "/path/to/their/input"
 ```
 
 Without a config.yaml, this creates one from the template built into `configure.py`. If one
@@ -236,15 +237,15 @@ to the `ask` below.
    not set:
    ```bash
    python3 install/jev_check.py probe                 # free: is the key accepted
-   python3 install/jev_check.py ask jev-1.13.0        # one real question, ~$0.00002
+   python3 install/jev_check.py ask jev-1.14.0        # one real question, ~$0.00002
    ```
-   Use a versioned model (`jev-1.13.0`) so cached scores don't change under
+   Use a versioned model (`jev-1.14.0`) so cached scores don't change under
    the user when TypeSafe ships a new release; `jev-latest` follows releases.
    Plain `jev` is not a model name: the API answers "Unknown model: jev".
 4. Save it:
    ```bash
-   $PY install/configure.py --jev-model jev-1.13.0                        # keep llm active
-   $PY install/configure.py --jev-model jev-1.13.0 --active-builder jev   # make jev active
+   $PY install/configure.py --jev-model jev-1.14.0                        # keep llm active
+   $PY install/configure.py --jev-model jev-1.14.0 --active-builder jev   # make jev active
    ```
 
 Ollama is still the definer's last fallback (step 7), so keep steps 4–5 even
@@ -309,7 +310,7 @@ Then tell the user:
 
 ## Removing it again
 
-- Delete `.venv312/` and `.tools/` from the project.
+- Delete `.venv/` and `.tools/` from the project.
 - **Linux Ollama:** run `systemctl --user disable --now ollama`, then delete
   `~/.config/systemd/user/ollama.service`, `~/.local/ollama` and
   `~/.local/bin/ollama`.
@@ -329,7 +330,7 @@ Then tell the user:
 | `bind: address already in use` from `ollama serve` | Another Ollama (maybe a system install) already holds port 11434. Use that one. |
 | `GPA_TOOLS_KEY is not set` / `The TypeSafe API key is not set` | The shell or app didn't load the profile. Open a new terminal, or on Linux/macOS run through `bash -ic`. On Windows, `setx` only affects new terminals. |
 | `HTTP 401` from TypeSafe | Wrong or revoked key: create a new one in the console and re-export it. |
-| `Unknown model: …` | Not a TypeSafe model name: `jev_check.py probe` lists aliases; versioned IDs like `jev-1.13.0` work too. |
+| `Unknown model: …` | Not a TypeSafe model name: `jev_check.py probe` lists aliases; versioned IDs like `jev-1.14.0` work too. |
 | `out of funds` | The TypeSafe balance is $0.00; the user adds funds in the console. |
 | `no usable browser: chrome, msedge, playwright chromium not installed` | No Chrome or Edge where Playwright looks. Run `$PY -m playwright install chromium`, or leave it: Ollama drafts instead. |
 | `Missing X server or $DISPLAY` (dev mode) | No desktop session (SSH, a server). Use `--definer-mode prod`. |
