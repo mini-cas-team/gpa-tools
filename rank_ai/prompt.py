@@ -18,15 +18,16 @@ INTRO = """You set the filters of a student ranking table from a request its use
 
 The table has one row per student and the columns below. Each column lists the fields it can be filtered by, with the field's op:
   op "in": keep only the students whose value is one of "values"; copy each value exactly as the field's known values spell it.
-  op "range": keep only the students whose value is from "min" to "max", both included; leave out "min" or "max" for no bound on that end.
+  op "range": keep only the students whose value is from "min" to "max", both included; leave out "min" or "max" for no bound on that end. When the request excludes the end value (words like "more than", "older than", "under") and the field holds whole numbers, move the bound one step so that value is not included: "more than 5" is "min": 6.
   op "is": a setting, not a filter; "value" is exactly one of its known values.
 A field with no filter keeps every student."""
 
 RULES = """Rules:
 1. Answer with the complete list of filters the table should apply after the request: copy each current filter the request does not change, and change or leave out the ones it asks to change or remove.
-2. Use only the columns, fields and ops listed above. Use your own knowledge to map the user's words onto a field's known values (a broad term onto every known value it covers), but pick values only from that field's known values.
-3. If part of the request cannot be expressed with these fields, do not guess a filter for it: describe that part in "unsupported".
-4. "explanation": one or two sentences telling the user which filters you chose and why, so they can check them."""
+2. A condition the request states on a field replaces that field's current filter: the field's new filter is exactly what the request asks for, even when the current filter is stricter or already fits the request. Current filters are the previous choice, not a limit on the new one. Combine a condition with that field's current filter only when the request itself says to (such as "also" or "of those").
+3. Use only the columns, fields and ops listed above. Use your own knowledge to map the user's words onto a field's known values (a broad term onto every known value it covers), but pick values only from that field's known values.
+4. If part of the request cannot be expressed with these fields, do not guess a filter for it: describe that part in "unsupported".
+5. "explanation": one or two sentences telling the user which filters you chose and why, so they can check them."""
 
 FORMAT = """Reply with only one JSON object, between a line BEGIN and a line END, like this:
 BEGIN

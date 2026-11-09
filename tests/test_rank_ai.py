@@ -105,6 +105,15 @@ def test_the_prompt_lists_every_field_its_meaning_and_known_values(cfg):
     assert p.rstrip().endswith("END")
 
 
+def test_the_prompt_says_a_new_condition_replaces_the_fields_filter_and_how_to_exclude_a_bound(cfg):
+    objs = objects(cfg)
+    p = prompts.build("x", [s for o in objs for s in o.filter_specs()],
+                      [f for o in objs for f in o.current_filters()], {}, "2026-01-02")
+    assert "replaces that field's current filter" in p
+    assert "even when the current filter is stricter or already fits the request" in p
+    assert '"more than 5" is "min": 6' in p
+
+
 def test_a_long_value_list_is_cut_in_the_prompt(cfg):
     from summary import FilterSpec
     line = prompts.field_line(FilterSpec("C", "f", "in", "m", values=[str(i) for i in range(prompts.MAX_VALUES + 5)]))

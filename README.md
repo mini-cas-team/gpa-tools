@@ -480,7 +480,9 @@ checked and changed by hand. Under the box: the model's explanation of what it
 chose, any part of the request the filters cannot express (*Could not be done
 with the filters*), any filter it gave that did not fit and was left out, and
 which provider answered. A request starts from the current filters: "also only
-women" adds to them, "drop the GPA limit" removes one.
+women" adds to them, "drop the GPA limit" removes one. A new condition on a
+field that already has a filter replaces it, so "older than 25" after "older
+than 30" widens the age filter, unless the request says to combine them.
 
 The code never looks at what is asked (`rank_ai/`):
 

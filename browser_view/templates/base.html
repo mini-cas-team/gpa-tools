@@ -174,8 +174,10 @@
   }
   /* A page that uses the whole window width, not main's 68rem column. */
   main.wide { max-width: none; }
-  /* Student Rank: Config on the right as narrow as its table, View takes the rest. */
+  /* Student Rank: Config on the right as narrow as its table but at most a fifth of
+     the window (when the panels are side by side), View takes the rest. */
   .rank-panels { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1.5rem; align-items: start; }
+  @media (min-width: 901px) { #rank-panel-config { box-sizing: border-box; max-width: 20vw; } }
   .rank-panels > section > h2:first-child { margin-top: 0; }
   /* The number of rows, beside a panel heading. */
   h2 .heading-count { margin-left: .5rem; color: var(--muted); font-size: .85rem; font-weight: 500; }
@@ -189,7 +191,7 @@
     .rank-panels { grid-template-columns: 1fr; }
     .rank-panels > section + section { border-left: 0; padding-left: 0; border-top: 1px solid var(--line); padding-top: 1rem; }
   }
-  table.rank-config td { white-space: nowrap; }
+  table.rank-config td:last-child { overflow-wrap: anywhere; }
   /* Student Rank's Ask AI box, under the Config table. */
   .rank-ask { width: 22rem; max-width: 100%; margin: 1.1rem 0 0; }
   .rank-ask h3 { margin: 0 0 .4rem; font-size: .95rem; }
