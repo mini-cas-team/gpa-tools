@@ -124,7 +124,9 @@ def query(site: str, question: str, profile_root: Path, timeout: float = 120.0,
           headless: bool = True, browser: str = "auto") -> str:
     """Ask ``site`` one question in a fresh chat and return the reply text.
 
-    ``question`` must be one line: Enter sends it."""
+    Enter sends it, so a question of several lines (rank_ai's prompt) is
+    entered line by line with Shift+Enter between them; a one-line question
+    (the definer's) is typed as before."""
     playwright, context = launch(site, profile_root, headless=headless, browser=browser)
     try:
         page = context.pages[0] if context.pages else context.new_page()
@@ -132,7 +134,15 @@ def query(site: str, question: str, profile_root: Path, timeout: float = 120.0,
         box = page.get_by_role("textbox", name=_PROMPT_BOX[site])
         box.wait_for(timeout=15000)
         box.click()
-        page.keyboard.type(question)
+        lines = question.split("\n")
+        if len(lines) == 1:
+            page.keyboard.type(question)
+        else:
+            for n, line in enumerate(lines):
+                if n:
+                    page.keyboard.press("Shift+Enter")
+                if line:
+                    page.keyboard.insert_text(line)  # one input event: fast for a long prompt
         page.keyboard.press("Enter")
         return _wait_for_stable_text(page, _RESPONSE_SELECTOR[site], timeout,
                                      busy_selector=_BUSY_SELECTOR.get(site))

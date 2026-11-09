@@ -46,6 +46,88 @@ class ABS(ABC):
         """What a sub-column means: its heading's hover text; "" for none."""
         return ""
 
+    # ---- what the object can be filtered by, for Student Rank's AI box (rank_ai) ----
+
+    def filter_specs(self) -> list[FilterSpec]:
+        """Every filter this object can take, described for an LLM; [] for none."""
+        return []
+
+    def current_filters(self) -> list[Filter]:
+        """The filters (and choices) this object applies now."""
+        return []
+
+    def params(self, filters: list[Filter]) -> list[tuple[str, str]]:
+        """``filters`` (all of them for this object, already checked against
+        filter_specs) as Student Rank query params; [] for none."""
+        return []
+
+
+# FilterSpec.op: what kind of filter a field takes.
+#   in      keep a value in a list of the field's known values (several)
+#   range   keep a value from min to max (inclusive; either end may be left out)
+#   is      pick exactly one of the known values (a setting, not a filter)
+OPS = ("in", "range", "is")
+
+
+@dataclass
+class FilterSpec:
+    """One field an object can be filtered by, as rank_ai offers it to an LLM."""
+    column: str  # the object's title: "Profile"
+    field: str  # "M.state", "category-gpa", ...
+    op: str  # one of OPS
+    meaning: str  # what the field is, in words
+    values: list[str] | None = None  # in / is: the known values
+    kind: str = "number"  # range: "number" or "date" (ISO YYYY-MM-DD)
+    low: float | None = None  # range: the lowest / highest value it can have
+    high: float | None = None
+
+
+@dataclass
+class Filter:
+    """One filter (or setting) of one object, as rank_ai reads it from an LLM's
+    answer and gives it back to the object's params()."""
+    column: str
+    field: str
+    op: str
+    values: list[str] | None = None  # in: the kept values; is: [the one picked]
+    min: float | str | None = None  # range (a str for a date field)
+    max: float | str | None = None
+
+    def to_dict(self) -> dict:
+        out: dict = {"column": self.column, "field": self.field, "op": self.op}
+        if self.op == "in":
+            out["values"] = list(self.values or [])
+        elif self.op == "is":
+            out["value"] = (self.values or [""])[0]
+        else:
+            if self.min is not None:
+                out["min"] = self.min
+            if self.max is not None:
+                out["max"] = self.max
+        return out
+
+
+def number(value: float | str) -> str:
+    """A range end as a query param: 3.0 -> "3", 3.25 -> "3.25", a date as it is."""
+    return value if isinstance(value, str) else f"{value:g}"
+
+
+def range_params(filters: list[Filter], prefixes: dict[str, str]) -> list[tuple[str, str]]:
+    """?<prefix>_min=&<prefix>_max= for each range filter whose field has a
+    prefix (Transcript's and Recommend Letter's FILTERS)."""
+    out = []
+    for f in filters:
+        if f.op == "range" and f.field in prefixes:
+            for end, value in (("min", f.min), ("max", f.max)):
+                if value is not None:
+                    out.append((f"{prefixes[f.field]}_{end}", number(value)))
+    return out
+
+
+def range_filters(column: str, ranges: dict[str, tuple]) -> list[Filter]:
+    """An object's applied {source: (low, high)} as range Filters."""
+    return [Filter(column, source, "range", min=low, max=high) for source, (low, high) in ranges.items()]
+
 
 
 def in_range(value: object, bounds: tuple | None) -> bool:

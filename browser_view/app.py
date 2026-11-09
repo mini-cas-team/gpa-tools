@@ -40,6 +40,7 @@ from category_builder.common import RunError, courses_csv_name
 from category_builder.definitions import Definitions
 from letter_builder import RANKS_CSV, letters_folder, letters_work_folder, rank_letters, students as letter_students
 from letter_builder.students import student_key
+import rank_ai
 from out_builder import publish
 from profile import display as profile_display, enrich, profile_load
 from summary import groups as summary_groups, table as summary_table
@@ -915,6 +916,41 @@ def create_app(config_path: Path | None = None) -> Flask:
         params += [(f"prof_in.{name}", v) for name, vs in query["values"].items() for v in vs]
         return params
 
+    def _rank_objects(cfg: dict) -> dict:
+        """Student Rank's objects as the query asks for them, and how they were
+        picked: Transcript (from the active builder: ?category=, ?by=, its ranges;
+        None when the builder has built nothing), Recommend Letter and Profile.
+        Shared by the page and its AI box, so both see the same filters."""
+        by = request.args.get("by")
+        by = by if by in TRANSCRIPT_SOURCES else DEFAULT_SOURCE
+        ranges = _ranges(TRANSCRIPT_FILTERS)
+        rec_ranges = _ranges(LETTER_FILTERS)
+        prof_fields = profile_fields(cfg)
+        prof_query = _profile_query(prof_fields)
+        out = dict(by=by, ranges=ranges, rec_ranges=rec_ranges, prof_fields=prof_fields,
+                   prof_query=prof_query, profile=Profile(cfg, **prof_query),
+                   builder=category_builder.active(cfg), categories=[], selected="",
+                   transcript=None, error=None)
+        # The Transcript column uses the active builder; its dialog picks the category.
+        try:
+            builder, folder = _builder_folder(cfg, None)
+            available = list(_built_categories(folder))
+        except (category_builder.UnknownBuilder, KeyError) as exc:
+            out["error"] = str(exc).strip("'\"")
+        else:
+            selected = (request.args.get("category") or "").upper()
+            if selected not in available:  # STEM when built, else the first category
+                selected = DEFAULT_CATEGORY if DEFAULT_CATEGORY in available else next(iter(available), "")
+            out.update(builder=builder, categories=available, selected=selected)
+            if selected:
+                out["transcript"] = Transcript(cfg, builder, selected, by, ranges, categories=available)
+            else:
+                out["error"] = (f"the {builder} builder has no results (*_gpa.csv) in {folder} yet,"
+                                " so there is no Transcript column")
+        out["recommendation"] = Recommendation(cfg, rec_ranges)
+        out["objects"] = [o for o in (out["transcript"], out["recommendation"], out["profile"]) if o]
+        return out
+
     @app.get("/view/summary")
     def view_summary():
         """One row per student name of every upload type, one column per ranked
@@ -925,15 +961,12 @@ def create_app(config_path: Path | None = None) -> Flask:
         ?count_min=/?count_max= keep only the students in those ranges) and
         Profile (one sub-column per ?prof_show= field, filtered: _profile_query)."""
         cfg = _load_config(config_path)
-        by = request.args.get("by")
-        by = by if by in TRANSCRIPT_SOURCES else DEFAULT_SOURCE
-        ranges = _ranges(TRANSCRIPT_FILTERS)
-        rec_ranges = _ranges(LETTER_FILTERS)
-        prof_fields = profile_fields(cfg)
-        prof_query = _profile_query(prof_fields)
-        profile = Profile(cfg, **prof_query)
-        page = dict(tab="view-summary", builder=category_builder.active(cfg), categories=[],
-                    selected="", by=by, sources={k: label for k, (_, label) in TRANSCRIPT_SOURCES.items()},
+        rank = _rank_objects(cfg)
+        by, ranges, rec_ranges = rank["by"], rank["ranges"], rank["rec_ranges"]
+        prof_fields, prof_query, profile = rank["prof_fields"], rank["prof_query"], rank["profile"]
+        transcript, recommendation = rank["transcript"], rank["recommendation"]
+        page = dict(tab="view-summary", builder=rank["builder"], categories=rank["categories"],
+                    selected=rank["selected"], by=by, sources={k: label for k, (_, label) in TRANSCRIPT_SOURCES.items()},
                     source_label=source_label, filters=TRANSCRIPT_FILTERS, ranges=ranges,
                     range_label=range_label, rec_ranges=rec_ranges, rec_filters=LETTER_FILTERS,
                     rec_sources=LETTER_SOURCES, rec_range_label=letter_range_label,
@@ -941,32 +974,11 @@ def create_app(config_path: Path | None = None) -> Flask:
                     prof_fields=prof_fields, prof=prof_query, prof_labels=profile.labels(),
                     prof_default_values=PROFILE_VALUES,
                     prof_params=_profile_params(prof_query),
-                    names=[], keys={}, columns=[], groups=[], sort_col=1, valid=set(), error=None,
+                    names=[], keys={}, columns=[], groups=[], sort_col=1, valid=set(), error=rank["error"],
                     # each Config column's meaning: its hover text
-                    descriptions={"Transcript": transcript_description(),
+                    descriptions={"Transcript": transcript_description(rank["selected"]),
                                   "Recommend Letter": LETTER_DESCRIPTION, "Profile": PROFILE_DESCRIPTION})
-        objects = []
-        # The Transcript column uses the active builder; its dialog picks the category.
-        try:
-            builder, folder = _builder_folder(cfg, None)
-            available = list(_built_categories(folder))
-        except (category_builder.UnknownBuilder, KeyError) as exc:
-            page["error"] = str(exc).strip("'\"")
-        else:
-            selected = (request.args.get("category") or "").upper()
-            if selected not in available:  # STEM when built, else the first category
-                selected = DEFAULT_CATEGORY if DEFAULT_CATEGORY in available else next(iter(available), "")
-            page.update(builder=builder, categories=available, selected=selected)
-            page["descriptions"]["Transcript"] = transcript_description(selected)
-            if selected:
-                transcript = Transcript(cfg, builder, selected, by, ranges)
-                objects.append(transcript)
-            else:
-                page["error"] = (f"the {builder} builder has no results (*_gpa.csv) in {folder} yet,"
-                                 " so there is no Transcript column")
-        recommendation = Recommendation(cfg, rec_ranges)
-        objects.append(recommendation)
-        objects.append(profile)
+        objects = rank["objects"]
         try:
             keys = name_keys(cfg)  # name -> file key, for the student dialog
             names = list(keys)  # every name is a row (View's All)
@@ -989,6 +1001,32 @@ def create_app(config_path: Path | None = None) -> Flask:
             if not names:
                 page["error"] = page["error"] or "no transcripts, letters or profiles yet"
         return render_template("view_summary.html", **page)
+
+    ask_lock = threading.Lock()  # one AI request at a time: one local model, one browser profile
+
+    @app.post("/view/summary/ask")
+    def view_summary_ask():
+        """Config → Ask AI: the request (form or JSON "question") turned into
+        Student Rank filters by rank_ai, starting from the filters in this URL's
+        query (the page's own). JSON: url (the page with the new filters),
+        explanation, unsupported, problems, filters, source, attempts; or error."""
+        data = request.get_json(silent=True) or request.form
+        question = str(data.get("question") or "").strip()
+        if not question:
+            return jsonify(error="type a request first"), 400
+        if not ask_lock.acquire(blocking=False):
+            return jsonify(error="another request is being answered; try again when it is done"), 409
+        try:
+            cfg = _load_config(config_path)
+            objects = _rank_objects(cfg)["objects"]
+            result = rank_ai.ask(cfg, question, objects)
+        except ValueError as exc:  # a bad rank-ai: section
+            return jsonify(error=str(exc)), 400
+        except rank_ai.AskFailed as exc:
+            return jsonify(error=str(exc), attempts=[a.line() for a in exc.attempts]), 502
+        finally:
+            ask_lock.release()
+        return jsonify(url=f"/view/summary?{urlencode(result.params)}", **result.to_dict())
 
     @app.get("/favicon.ico")
     def favicon():

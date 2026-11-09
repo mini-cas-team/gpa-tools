@@ -27,7 +27,7 @@ import logging
 from pathlib import Path
 
 import category_builder
-from summary import ABS, RankItem, filtered
+from summary import ABS, Filter, FilterSpec, RankItem, filtered, range_filters, range_params
 
 log = logging.getLogger(__name__)
 
@@ -98,7 +98,9 @@ def range_label(source: str, low: float | None, high: float | None) -> str:
 
 class Transcript(ABS):
     def __init__(self, cfg: dict, builder: str, category: str, by: str = DEFAULT_SOURCE,
-                 ranges: dict[str, Range] | None = None):
+                 ranges: dict[str, Range] | None = None, categories: list[str] | None = None):
+        """``categories``: every category the builder has built (the ones the
+        category setting can pick); default just ``category``."""
         if by not in SOURCES:
             raise ValueError(f"unknown transcript source {by!r}; one of {', '.join(SOURCES)}")
         self.ranges: dict[str, Range] = {}
@@ -110,6 +112,7 @@ class Transcript(ABS):
             if low is not None or high is not None:
                 self.ranges[source] = (low, high)
         self.category, self.by = category.upper(), by
+        self.categories = [c.upper() for c in categories or [category]]
         self.csv_columns = {source: column.format(CAT=self.category, cat=self.category.lower())
                         for source, (column, _) in SOURCES.items()}
         self.column = self.csv_columns[by]
@@ -163,3 +166,28 @@ class Transcript(ABS):
         return [(source_label(source, self.category),
                  [RankItem(name, row.get(source)) for name, row in rows])
                 for source in SOURCES]
+
+    # ---- rank_ai: one range per source, plus the category and Rank by settings ----
+
+    def filter_specs(self) -> list[FilterSpec]:
+        specs = [FilterSpec(self.title, "category", "is",
+                            "The course category the GPAs below are computed for; "
+                            "each category is a separate build",
+                            values=list(self.categories)),
+                 FilterSpec(self.title, "rank-by", "is",
+                            "Which of the sources below the table is sorted by first",
+                            values=list(SOURCES))]
+        specs += [FilterSpec(self.title, source, "range", source_hint(source, self.category),
+                             low=0.0, high=top) for source, (_, top) in FILTERS.items()]
+        return specs
+
+    def current_filters(self) -> list[Filter]:
+        return [Filter(self.title, "category", "is", [self.category]),
+                Filter(self.title, "rank-by", "is", [self.by]),
+                *range_filters(self.title, self.ranges)]
+
+    def params(self, filters: list[Filter]) -> list[tuple[str, str]]:
+        picked = {f.field: (f.values or [""])[0] for f in filters if f.op == "is"}
+        return [("category", picked.get("category") or self.category),
+                ("by", picked.get("rank-by") or self.by),
+                *range_params(filters, {source: prefix for source, (prefix, _) in FILTERS.items()})]

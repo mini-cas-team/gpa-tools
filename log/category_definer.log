@@ -1335,3 +1335,24 @@
 2026-11-08 20:10:42 LAW: drafted by ollama (1 failure(s))
   gemini try 1 (0.0s) failed: OSError: down
   ollama try 1 (0.0s) ok
+2026-11-08 21:07:39 LAW: drafted by ollama (2 failure(s))
+  chatgpt try 1 (0.0s) failed: OSError: down
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok
+2026-11-08 21:07:39 LAW: drafted by ollama (1 failure(s))
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok
+2026-11-08 21:23:39 LAW: drafted by ollama (2 failure(s))
+  chatgpt try 1 (0.0s) failed: OSError: down
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok
+2026-11-08 21:23:39 LAW: drafted by ollama (1 failure(s))
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok
+2026-11-08 21:35:44 LAW: drafted by ollama (2 failure(s))
+  chatgpt try 1 (0.0s) failed: OSError: down
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok
+2026-11-08 21:35:44 LAW: drafted by ollama (1 failure(s))
+  gemini try 1 (0.0s) failed: OSError: down
+  ollama try 1 (0.0s) ok

@@ -94,6 +94,19 @@
     </tr>
   </tbody>
 </table>
+{# Ask AI: a request in the user's own words; rank_ai turns it into the filters
+   above (POST /view/summary/ask with this page's query), and the page reloads
+   with them. The answer's explanation is kept for the reloaded page. #}
+<form class="rank-ask" id="ask-form" aria-labelledby="ask-heading">
+  <h3 id="ask-heading">Ask AI</h3>
+  <textarea name="question" id="ask-question" rows="3" aria-labelledby="ask-heading" required
+            placeholder="Describe the students to show, in your own words"></textarea>
+  <div class="ask-row">
+    <span class="hint" id="ask-status" aria-live="polite"></span>
+    <button type="submit" id="ask-go">Go</button>
+  </div>
+  <div class="ask-note" id="ask-note" hidden></div>
+</form>
 </section>
 </div>
 
@@ -325,6 +338,89 @@
   wire("transcript", relabel);
   wire("recommendation");
   wire("profile");
+
+  // ---- Ask AI: the request goes to rank_ai with this page's filters; its
+  // answer is a URL with the new ones. The explanation is kept (this tab only)
+  // for the page that URL opens. ------------------------------------------------
+  const askForm = document.getElementById("ask-form");
+  const askBox = document.getElementById("ask-question");
+  const askGo = document.getElementById("ask-go");
+  const askStatus = document.getElementById("ask-status");
+  const askNote = document.getElementById("ask-note");
+  const NOTE_KEY = "student-rank-ask";
+  const el = (tag, text, cls) => {
+    const node = document.createElement(tag);
+    node.textContent = text;
+    if (cls) node.className = cls;
+    return node;
+  };
+  const list = (title, items) => {
+    const wrap = document.createElement("div");
+    wrap.append(el("p", title));
+    const ul = el("ul", "", "notes");
+    for (const item of items) ul.append(el("li", item));
+    wrap.append(ul);
+    return wrap;
+  };
+  function showNote(note) {
+    askNote.replaceChildren();
+    if (note.error) {
+      const box = el("div", note.error, "error");
+      askNote.append(box);
+      if (note.attempts && note.attempts.length) askNote.append(list("Tries:", note.attempts));
+    } else {
+      if (note.explanation) askNote.append(el("p", note.explanation));
+      if (note.unsupported && note.unsupported.length)
+        askNote.append(list("Could not be done with the filters:", note.unsupported));
+      if (note.problems && note.problems.length)
+        askNote.append(list("Left out (the answer did not fit):", note.problems));
+      if (note.source) askNote.append(el("p", `Answered by ${note.source}.`, "hint"));
+    }
+    askNote.hidden = false;
+  }
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(NOTE_KEY) || "null");
+    if (saved && saved.url === location.pathname + location.search) {
+      askBox.value = saved.question || "";
+      showNote(saved);
+    }
+  } catch {}
+  askBox.addEventListener("keydown", (e) => {  // Enter sends; Shift+Enter is a new line
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      askForm.requestSubmit();
+    }
+  });
+  askForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const question = askBox.value.trim();
+    if (!question) return;
+    askGo.disabled = askBox.readOnly = true;
+    askNote.hidden = true;
+    const started = Date.now();
+    const tick = () => { askStatus.textContent = `Asking… ${Math.round((Date.now() - started) / 1000)}s`; };
+    tick();
+    const timer = setInterval(tick, 1000);
+    let note;
+    try {
+      const resp = await fetch(`/view/summary/ask${location.search}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question }),
+      });
+      note = await resp.json().catch(() => ({ error: `the server answered ${resp.status}` }));
+      if (!resp.ok && !note.error) note.error = `the server answered ${resp.status}`;
+    } catch (err) {
+      note = { error: `could not reach the server: ${err}` };
+    }
+    clearInterval(timer);
+    askStatus.textContent = "";
+    askGo.disabled = askBox.readOnly = false;
+    if (note.error) { showNote(note); return; }
+    note.question = question;
+    try { sessionStorage.setItem(NOTE_KEY, JSON.stringify(note)); } catch {}
+    if (note.url === location.pathname + location.search) showNote(note);  // nothing changed
+    else location.href = note.url;
+  });
 
   const table = document.getElementById("rank-summary");
   if (!table) return;

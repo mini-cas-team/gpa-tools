@@ -25,7 +25,7 @@ import re
 from dataclasses import dataclass, field as dc_field
 
 from profile import display, profile_load
-from summary import ABS, RankItem
+from summary import ABS, Filter, FilterSpec, RankItem, number
 
 TITLE = "Profile"
 DESCRIPTION = "The applicant's personal information"
@@ -176,4 +176,46 @@ class Profile(ABS):
         out = [f"{name} {range_label(RANGE_FIELDS[name], low, high)}"
                for name, (low, high) in self.ranges.items()]
         out += [f"{name}: {', '.join(wanted)}" for name, wanted in self.values.items()]
+        return out
+
+    # ---- rank_ai: which fields are shown, and one filter per field ----
+
+    def filter_specs(self) -> list[FilterSpec]:
+        """"show" (the fields shown, the first sorted by; only a shown field
+        filters, so a field filtered is shown too), then each field: a range
+        field's from/to, every other field's list of known values."""
+        fields = profile_fields(self.cfg)
+        specs = [FilterSpec(self.title, "show", "in",
+                            "Which profile fields are shown as columns, in order",
+                            values=list(fields) or list(self.show))]
+        for name, f in fields.items():
+            if f.kind == "list":
+                specs.append(FilterSpec(self.title, name, "in", f.hint, values=list(f.values)))
+            else:
+                specs.append(FilterSpec(self.title, name, "range", f.hint, kind=f.kind))
+        return specs
+
+    def current_filters(self) -> list[Filter]:
+        out = [Filter(self.title, "show", "in", list(self.show))]
+        out += [Filter(self.title, name, "range", min=low, max=high)
+                for name, (low, high) in self.ranges.items()]
+        out += [Filter(self.title, name, "in", list(v)) for name, v in self.values.items()]
+        return out
+
+    def params(self, filters: list[Filter]) -> list[tuple[str, str]]:
+        """prof_show (the "show" filter's fields, else the ones shown now, then
+        every filtered field not among them), prof_min./prof_max.<field> and
+        prof_in.<field>."""
+        picked = next((f.values for f in filters if f.field == "show" and f.values), None)
+        show = list(dict.fromkeys([*(picked or self.show),
+                                   *(f.field for f in filters if f.field != "show")]))
+        out = [("prof_show", name) for name in show]
+        for f in filters:
+            if f.field == "show":
+                continue
+            if f.op == "range":
+                out += [(f"prof_{end}.{f.field}", number(v))
+                        for end, v in (("min", f.min), ("max", f.max)) if v is not None]
+            elif f.op == "in":
+                out += [(f"prof_in.{f.field}", v) for v in f.values or []]
         return out

@@ -46,6 +46,22 @@ category-definer:
   browser: auto # auto (Chrome, else Edge, else Playwright's Chromium), chrome, msedge, chromium
   # profile-folder: ~/gpa-tools-data/work/browser-profiles # default <work-folder>/browser-profiles
 
+# --- rank-ai: View → Rank's Ask AI box --------------------------------------------
+# Turns a request in plain words into Student Rank's filters. The providers are tried
+# in turn until one answers: ollama (local, nothing leaves the machine), gemini and
+# chatgpt (their free web chats, like category-definer's; they receive the prompt,
+# which lists every known profile value such as cities and institutions, but no
+# student names), claude (the Anthropic API; key in claude-api-key-env).
+# Every request is logged to <log-folder>/rank_ai.log.
+rank-ai:
+  providers: [ollama] # e.g. [ollama, gemini]
+  repairs: 1 # asks the same provider again, with the problems, when its answer does not fit
+  # model: qwen2.5:7b # ollama; default category-builder: llm: category-definition-model
+  # num-ctx: 16384 # ollama context (tokens); the prompt lists every known value
+  # timeout: 600 # seconds per ollama or claude answer
+  # claude-model: claude-sonnet-5-5
+  # claude-api-key-env: ANTHROPIC_API_KEY
+
 # --- category definitions (all builders) ------------------------------------
 # Shared by every category builder; drafted by category-definer, edit freely.
 # Changing a definition clears the llm builder's cached answers for it.

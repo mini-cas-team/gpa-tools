@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from letter_builder import letters_folder, letters_work_folder
 from letter_builder import students as letter_students
-from summary import ABS, RankItem, filtered
+from summary import ABS, Filter, FilterSpec, RankItem, filtered, range_filters, range_params
 from summary.names import letter_names
 
 # source -> its sub-column heading
@@ -87,3 +87,16 @@ class Recommendation(ABS):
         rows = self._rows()
         return [(title, [RankItem(name, row[source]) for name, row in rows])
                 for source, title in SOURCES.items()]
+
+    # ---- rank_ai: one range per source ----
+
+    def filter_specs(self) -> list[FilterSpec]:
+        return [FilterSpec(self.title, source, "range", HINTS[source],
+                           low=0.0, high=None if top is None else float(top))
+                for source, (_, top) in FILTERS.items()]
+
+    def current_filters(self) -> list[Filter]:
+        return range_filters(self.title, self.ranges)
+
+    def params(self, filters: list[Filter]) -> list[tuple[str, str]]:
+        return range_params(filters, {source: prefix for source, (prefix, _) in FILTERS.items()})

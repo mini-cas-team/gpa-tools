@@ -74,7 +74,7 @@ components: [transcripts, letters, personal]
 input-folder: /home/personal/Templates             # raw input, <input-folder>/<component>/; never written by a run
 work-folder: /home/personal/Templates/work         # made from it, <work-folder>/<component>/; and <builder>/ folders
 out-folder: /home/personal/Templates/out           # published <cat>_gpa.csv, for other applications
-log-folder: /home/personal/Templates/log           # upload, llm_category, jev_category, category_definer, browser_view .log
+log-folder: /home/personal/Templates/log           # upload, llm_category, jev_category, category_definer, rank_ai, browser_view .log
 min-category-courses: 4      # View tab: hide students with fewer category courses
 run_mode: dev                # dev: the student dialog's letters tab also shows Jev's rank and confidence
 
@@ -96,6 +96,15 @@ category-definer:            # drafts definitions: the mode's steps in turn unti
   retries: 1                 # extra tries for chatgpt and gemini
   browser-timeout: 120       # seconds to wait for a site's reply
   browser: auto              # Chrome, else Edge, else Playwright's Chromium; or chrome / msedge / chromium
+
+rank-ai:                     # View → Rank's Ask AI box
+  providers: [ollama]        # tried in turn until one answers: ollama, gemini, chatgpt, claude
+  repairs: 1                 # asks again, with the problems, when an answer does not fit
+  # model: qwen2.5:7b        # ollama; default category-definition-model
+  # num-ctx: 16384           # ollama context, in tokens
+  # timeout: 600             # seconds per ollama or claude answer
+  # claude-model: claude-sonnet-5-5
+  # claude-api-key-env: ANTHROPIC_API_KEY
 
 category-definitions:        # shared by every builder; drafted by category-definer, edit freely
   STEM: STEM stands for Science, Technology, Engineering, and Mathematics. ...
@@ -458,8 +467,37 @@ dialog only.
 | *Profile* | `summary.personal.Profile`: every `<work-folder>/personal/*.json` with a `name`, its fields as View → Profiles shows them (`profile/display.py`); one sub-column per shown field | A table of every field but `name`, one row each: **Show** (`?prof_show=`, repeated; the sub-columns, in the rows' order; default `institution` and `program`, those the profiles have, else the first field; at least one), **Field** and **Filter**. A range field, `age`, `birth_date` (ISO dates) and `years_of_military_service`, has from–to (`?prof_min.<field>=`/`?prof_max.<field>=`, both ends included, either may be empty). Every other field is a string list, a `list[str]` typed one value per line (`?prof_in.<field>=`, newline-separated or repeated): a value in the list, ignoring case, is shown, any other (or none) shows `–`; an empty list keeps every value. `sex` starts as `M` and `F` (`summary.personal.DEFAULT_VALUES`), and goes back to them when its box is emptied. Only a shown field filters: while **Show** is not ticked, its filter is turned off in the dialog, and the server drops it. A filter never drops a student or blanks another field: only its own field's cells outside it show `–` | – (no Rank by: `rank()` gives the first shown field; a text field sorts as text) |
 
 With no category built yet there is no Transcript column. To add a column,
-write another `ABS` subclass, add it to the list in the `/view/summary` route,
-and give it a Config row and dialog in `view_summary.html`.
+write another `ABS` subclass, add it to `_rank_objects` in `browser_view/app.py`
+(shared by the page and Ask AI), and give it a Config row and dialog in
+`view_summary.html`; for Ask AI to filter it, give it `filter_specs()`,
+`current_filters()` and `params()` (below).
+
+**Ask AI**, under the Config table, sets the filters from a request typed in
+plain words. **Go** (or Enter; Shift+Enter is a new line) sends it, with the
+page's current filters, to `POST /view/summary/ask`, and the page then opens
+with the new filters, shown in Config and the dialogs as usual, so they can be
+checked and changed by hand. Under the box: the model's explanation of what it
+chose, any part of the request the filters cannot express (*Could not be done
+with the filters*), any filter it gave that did not fit and was left out, and
+which provider answered. A request starts from the current filters: "also only
+women" adds to them, "drop the GPA limit" removes one.
+
+The code never looks at what is asked (`rank_ai/`):
+
+| step | what it does |
+|---|---|
+| `ABS.filter_specs()` | each column describes what it can be filtered by, from the data at request time: every field, its meaning (the hover texts), its kind (`in` a list of known values, a from–to `range`, or a setting that `is` one value) and its known values (`profile_fields` lists every value the profiles have). Transcript: `category`, `rank-by` and its three ranges; Recommend Letter: its two ranges; Profile: `show` (the fields shown) and each field |
+| `rank_ai.prompt.build` | the columns and fields, today's date, the current filters (`ABS.current_filters()`, in the answer's own format), the request word for word, the rules (answer with the complete list of filters; take values only from the known ones; put what cannot be done in `unsupported`) and the format: one JSON object between `BEGIN` and `END` |
+| `rank_ai.providers` | `ask(prompt) -> text`, in the order of `rank-ai: providers`: **ollama** (`/api/generate`, temperature 0, its output held to `answer.SCHEMA`), **gemini** and **chatgpt** (the free web chats, as category-definer uses them, with a browser profile of their own in `<work-folder>/browser-profiles/rank-ai/`; a prompt of several lines is entered with Shift+Enter between them), **claude** (the Anthropic Messages API, its key in the environment variable `claude-api-key-env` names). A provider that fails hands over to the next |
+| `rank_ai.answer` | takes the last JSON object with `filters` out of the reply (any preamble or code fence around it), then checks each filter against the specs: a known column and field, values spelled as the data spells them (ignoring case), range ends that are numbers (or ISO dates) inside the field's bounds. What does not fit is told back to the same provider, which answers again (`repairs` times); after that the filters that fit are applied and the rest listed |
+| `ABS.params()` | each column turns its filters back into its own query params (`prof_show`, `prof_in.<field>`, `gpa_min`, ...). A Profile field that is filtered is also shown, since only a shown field filters |
+
+Every request, its tries and its answer go to `<log-folder>/rank_ai.log`.
+With ollama nothing leaves the machine. The web chats and claude receive the
+prompt, which holds every known profile value (cities, institutions,
+programs, ...) but no student names. One request is answered at a time. On a
+machine without a GPU a 7B model takes minutes to read the prompt; set
+`rank-ai: model:` to a smaller one, or put a web chat first.
 
 **This is a localhost tool for one operator.** It serves files from the
 configured folders, and Flask's development server is what `--host` binds;
@@ -493,6 +531,8 @@ jev_category/     the jev builder (python -m jev_category)
 out_builder/      publish <cat>_gpa.csv to out-folder (python -m out_builder)
 letter_builder/   recommendation letters: pdf2txt, then rank_letters with Jev
 browser_view/     Flask UI: transcript and letter pages (python -m browser_view)
+summary/          Student Rank's columns (summary.ABS subclasses)
+rank_ai/          Student Rank's Ask AI: prompt, providers, answer checks
 install/          per-user installer scripts (used by /install-gpa-tools)
 tests/
 ```
