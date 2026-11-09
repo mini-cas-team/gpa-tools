@@ -6,7 +6,6 @@ __pycache__/
 
 # Analysis output and scratch space
 out/
-.work/
 
 # Claude Code: share the project's skills, keep machine-local settings out.
 # The pattern must exclude .claude's *contents* rather than .claude itself --
@@ -16,5 +15,12 @@ out/
 !.claude/skills/
 
 # Editor and OS cruft
+.vscode/
 .DS_Store
 *.swp
+
+# category-definer's Chrome profiles when there is no work-folder
+.browser-profiles/
+
+# Installer: micromamba and its poppler env (install/get_tools.py)
+.tools/
