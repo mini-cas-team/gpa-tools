@@ -4,24 +4,24 @@
 
 {% block body %}
 <section aria-labelledby="letters-heading" class="help">
-<h2 id="letters-heading" style="margin-top:0">Upload</h2>
+<h2 id="letters-heading" style="margin-top:0">Recommendations Upload</h2>
 <form id="letters-form" method="post" action="/letters/upload" enctype="multipart/form-data">
   <fieldset>
     <legend>Recommendation letters</legend>
     <label for="letter-pdfs">Upload letters</label>
     <input type="file" id="letter-pdfs" name="pdfs" accept="application/pdf,.pdf" multiple>
     <p class="hint">Leave empty to take every PDF already in <code>{{ folder }}</code>,
-      the <code>letters-folder</code> in config.yaml. A letter that already has a
-      <code>&lt;name&gt;.txt</code> there was uploaded before and is skipped.</p>
+      <code>&lt;input-folder&gt;/letters</code> in config.yaml. A letter that already has a
+      <code>&lt;name&gt;.txt</code> in <code>{{ work }}</code> was ranked before and is skipped.</p>
   </fieldset>
 
   <fieldset>
     <legend>Output</legend>
     <p class="hint" style="margin-top:0">New PDFs are saved in <code>{{ folder }}</code>.
-      Each becomes <code>&lt;name&gt;.txt</code>
+      Each becomes <code>&lt;name&gt;.txt</code> in <code>{{ work }}</code>
       (<code>pdftotext -layout</code>), and Jev ranks it as an excellent, good or normal
       letter, about a second per letter. The ranks are added to
-      <code>{{ folder }}/letter_ranks.csv</code>, which the View page shows.</p>
+      <code>{{ work }}/letter_ranks.csv</code>, which the View page shows.</p>
   </fieldset>
 
   <button type="submit">Upload</button>

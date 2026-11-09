@@ -121,17 +121,19 @@ def test_pdf_to_txt_needs_pdftotext(tmp_path, monkeypatch):
         convert_module.pdf_to_txt(tmp_path / "a.pdf", tmp_path / "a.txt")
 
 
-def test_upload_converts_the_pdf_folder(tmp_path, fake_pdftotext, monkeypatch):
+def test_upload_converts_the_input_transcripts_into_the_work_folder(tmp_path, fake_pdftotext, monkeypatch):
     monkeypatch.setattr(upload_main, "log", upload_main.logging.getLogger("upload-test"))
-    pdfs = tmp_path / "pdfs"
-    pdfs.mkdir()
+    pdfs = tmp_path / "in" / "transcripts"
+    pdfs.mkdir(parents=True)
     (pdfs / "ann.pdf").write_text(TRANSCRIPT_TXT, encoding="utf-8")
     (pdfs / "bad.pdf").write_text("broken", encoding="utf-8")
     config = tmp_path / "config.yaml"
-    config.write_text(f"pdf-folder: {pdfs}\nwork-folder: {tmp_path / 'work'}\n"
+    config.write_text(f"input-folder: {tmp_path / 'in'}\nwork-folder: {tmp_path / 'work'}\n"
                       f"log-folder: {tmp_path / 'log'}\n", encoding="utf-8")
     assert upload_main.main(["--config", str(config)]) == 1  # one PDF failed
-    assert (tmp_path / "work" / "ann.common.json").is_file()
-    assert not (tmp_path / "work" / "bad.common.json").exists()
+    work = tmp_path / "work" / "transcripts"
+    assert (work / "ann.common.json").is_file() and (work / "ann.txt").is_file()
+    assert not (work / "bad.common.json").exists()
+    assert sorted(p.name for p in pdfs.iterdir()) == ["ann.pdf", "bad.pdf"]  # input untouched
     log_text = (tmp_path / "log" / "upload.log").read_text(encoding="utf-8")
     assert "bad.pdf: Syntax Error" in log_text and "1 converted, 1 failed" in log_text

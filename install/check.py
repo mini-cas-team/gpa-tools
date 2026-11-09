@@ -22,14 +22,15 @@ import urllib.request
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-VENV = PROJECT_ROOT / ".venv312"
+VENV = PROJECT_ROOT / ".venv"
 TOOLS_DIR = PROJECT_ROOT / ".tools"  # micromamba + its env, made by get_tools.py
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 # The jev builder's defaults (jev_category/builder.py DEFAULTS; repeated here
 # because this file must run before the venv and PyYAML exist).
-JEV_DEFAULTS = {"model": "jev-1.13.0", "api-url": "https://api.typesafe.ai/v1/systemone",
+JEV_DEFAULTS = {"model": "jev-1.14.0", "api-url": "https://api.typesafe.ai/v1/systemone",
                 "api-key-env": "GPA_TOOLS_KEY"}
-PYTHON_WANTED = (3, 12)
+# The Pythons gpa-tools runs on, preferred first (a venv of either works).
+PYTHON_SUPPORTED = ((3, 14), (3, 12))
 
 # qwen2.5 sizes, smallest first, with Ollama's download size in GB (q4). A
 # model needs about its download size in memory plus OVERHEAD_GB for context.
@@ -212,17 +213,21 @@ def recommend_models(ram: float | None, gpu_list: list[dict]) -> dict:
 
 def python_info() -> dict:
     found = {}
-    for name in ("python3.12", "python3", "python", "py"):
-        path = shutil.which(name)
+    names = [f"python{a}.{b}" for a, b in PYTHON_SUPPORTED] + ["python3", "python"]
+    names += [f"py -{a}.{b}" for a, b in PYTHON_SUPPORTED]  # the Windows launcher
+    for name in names:
+        command, _, flag = name.partition(" ")
+        path = shutil.which(command)
         if path:
-            args = [path, "-3.12"] if name == "py" else [path]
-            version = run(args + ["-c", "import sys; print('%d.%d.%d' % sys.version_info[:3])"])
+            version = run([path, *([flag] if flag else []),
+                           "-c", "import sys; print('%d.%d.%d' % sys.version_info[:3])"])
             if re.fullmatch(r"\d+\.\d+\.\d+", version):
-                found[name] = {"path": path, "version": version}
+                found[name] = {"path": path, "version": version, "supported": supported(version)}
     venv_python = VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     venv = {"path": str(VENV), "exists": venv_python.exists(), "python": str(venv_python)}
     if venv["exists"]:
         venv["version"] = run([str(venv_python), "-c", "import sys; print('%d.%d.%d' % sys.version_info[:3])"])
+        venv["supported"] = supported(venv["version"])
         missing = run([str(venv_python), "-c",
                        "import importlib.util as u; "
                        "print(' '.join(m for m in ('yaml', 'flask', 'playwright', 'pytest') "
@@ -230,6 +235,11 @@ def python_info() -> dict:
         venv["missing_packages"] = missing.split()
     return {"running": sys.version.split()[0], "candidates": found, "venv": venv,
             "uv": shutil.which("uv") or _user_bin("uv")}
+
+
+def supported(version: str) -> bool:
+    """"3.12.3" -> True: its major.minor is one of PYTHON_SUPPORTED."""
+    return tuple(int(n) for n in version.split(".")[:2]) in PYTHON_SUPPORTED if version else False
 
 
 def _user_bin(name: str) -> str | None:
@@ -386,7 +396,10 @@ def jev_info(config: dict) -> dict:
 # ---- config ----------------------------------------------------------------
 
 # Keys an older config.yaml may still have, and what replaced them.
-OUTDATED_KEYS = {"llm-category": "category-builder: llm: (category-build-model, ollama-url)"}
+OUTDATED_KEYS = {"llm-category": "category-builder: llm: (category-build-model, ollama-url)",
+                 "pdf-folder": "input-folder: (PDFs in <input-folder>/transcripts)",
+                 "letters-folder": "input-folder: (letters in <input-folder>/letters)",
+                 "personal-folder": "input-folder: (profiles in <input-folder>/personal)"}
 DEFAULT_MODEL = "qwen2.5:3b"
 
 
@@ -448,7 +461,7 @@ def read_config() -> tuple[dict, str]:
 
 def config_info(config: dict, status: str) -> dict:
     info = {"path": str(PROJECT_ROOT / "config.yaml"), "status": status}
-    for key in ("pdf-folder", "work-folder", "out-folder", "log-folder"):
+    for key in ("input-folder", "work-folder", "out-folder", "log-folder"):
         if key in config:
             folder = Path(str(config[key])).expanduser()
             info[key] = {"value": str(config[key]), "exists": folder.is_dir()}
@@ -509,9 +522,12 @@ def as_text(r: dict) -> str:
         f"build     {r['recommended_models']['build']['model']}  ({r['recommended_models']['build']['reason']})",
         f"define    {r['recommended_models']['definition']['model']}  "
         f"({r['recommended_models']['definition']['reason']}); download {r['recommended_models']['download_gb']} GB",
-        "python    " + (", ".join(f"{k} {v['version']}" for k, v in p["candidates"].items()) or "none found")
-        + f"; uv: {p['uv'] or 'no'}",
-        f"venv      {yes(p['venv']['exists'])}" + (f" ({p['venv'].get('version')}, missing: "
+        "python    " + (", ".join(f"{k} {v['version']}" + ("" if v["supported"] else " (unsupported)")
+                                  for k, v in p["candidates"].items()) or "none found")
+        + f"; supported: {', '.join('%d.%d' % v for v in PYTHON_SUPPORTED)}; uv: {p['uv'] or 'no'}",
+        f"venv      {yes(p['venv']['exists'])}" + (f" ({p['venv'].get('version')}"
+                                                   + ("" if p["venv"].get("supported") else " unsupported")
+                                                   + ", missing: "
                                                    f"{' '.join(p['venv']['missing_packages']) or 'nothing'})"
                                                    if p["venv"]["exists"] else ""),
     ]
@@ -543,7 +559,7 @@ def as_text(r: dict) -> str:
     lines.append(jev)
     for key, instead in c["outdated"].items():
         lines.append(f"  OUTDATED: '{key}:' is from an older config.yaml; use {instead}")
-    for key in ("pdf-folder", "work-folder", "out-folder", "log-folder"):
+    for key in ("input-folder", "work-folder", "out-folder", "log-folder"):
         if key in c:
             lines.append(f"  {key}: {c[key]['value']}" + ("" if c[key]["exists"] else "  (does not exist)"))
     return "\n".join(lines)

@@ -2,10 +2,10 @@
 
     python3 -m browser_view          # http://127.0.0.1:5001
 
-Two tabs, opening on Upload: Upload converts uploaded PDFs (or every PDF in
-pdf-folder) to <name>.txt and <name>.common.json (with per-course GPA) in
-config.yaml's work-folder -- the input every category builder reads.  A
-Categories panel beside it lists config.yaml's category-definitions and adds
+Upload > Transcripts converts uploaded PDFs (saved in <input-folder>/transcripts,
+or every PDF already there) to <name>.txt and <name>.common.json (with per-course
+GPA) in <work-folder>/transcripts -- the input every category builder reads.  A
+Category Build panel beside it lists config.yaml's category-definitions and adds
 a category: category-definer drafts a definition, the operator edits and
 saves it, and after a time estimate the selected builder runs on it in the
 background; out_builder then publishes the result to out-folder.  View reads
@@ -20,6 +20,7 @@ files from the configured folders.  Do not expose it to a network.
 from __future__ import annotations
 
 import csv
+import json
 import logging
 import re
 import shutil
@@ -30,14 +31,26 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 import yaml
-from flask import Flask, abort, jsonify, render_template, request, send_file
+from flask import Flask, abort, jsonify, redirect, render_template, request, send_file
 
 import category_builder
+import folders
 from category_builder import definer
 from category_builder.common import RunError, courses_csv_name
 from category_builder.definitions import Definitions
-from letter_builder import RANKS_CSV, letters_folder, rank_letters, students as letter_students
+from letter_builder import RANKS_CSV, letters_folder, letters_work_folder, rank_letters, students as letter_students
+from letter_builder.students import student_key
 from out_builder import publish
+from profile import display as profile_display, enrich, profile_load
+from summary import groups as summary_groups, table as summary_table
+from summary.names import name_keys
+from summary.personal import (DEFAULT_SHOW as PROFILE_SHOW, DEFAULT_VALUES as PROFILE_VALUES, DESCRIPTION as PROFILE_DESCRIPTION,
+                              ISO_DATE, Profile, profile_fields)
+from summary.recommendation import (DESCRIPTION as LETTER_DESCRIPTION, FILTERS as LETTER_FILTERS, HINTS as LETTER_HINTS,
+                                    SOURCES as LETTER_SOURCES, Recommendation,
+                                    range_label as letter_range_label)
+from summary.transcript import DEFAULT_CATEGORY, DEFAULT_SOURCE, FILTERS as TRANSCRIPT_FILTERS, SOURCES as TRANSCRIPT_SOURCES, Transcript, range_label, source_hint, source_label
+from summary.transcript import SOURCE_HINTS as TRANSCRIPT_HINTS, description as transcript_description
 from upload.convert import add_tool_folders, pdf_to_common_json
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -122,8 +135,8 @@ def _courses_from_csv(path: Path, category: str, name: str) -> list[dict]:
     return courses
 
 
-def _collect_pdfs(files, pdf_folder: str, staging: Path) -> tuple[list[Path], str]:
-    """Uploaded PDFs (saved into ``staging``), else every PDF in pdf-folder."""
+def _collect_pdfs(files, pdf_folder: Path, staging: Path) -> tuple[list[Path], str]:
+    """Uploaded PDFs (saved into ``staging``), else every PDF in ``pdf_folder``."""
     uploads = [f for f in files.getlist("pdfs") if f and f.filename]
     if uploads:
         kept = []
@@ -134,9 +147,7 @@ def _collect_pdfs(files, pdf_folder: str, staging: Path) -> tuple[list[Path], st
             upload.save(staging / name)
             kept.append(staging / name)
         return sorted(kept), f"{len(kept)} uploaded file(s)"
-    if not pdf_folder:
-        raise ValueError("upload at least one PDF, or set pdf-folder in config.yaml")
-    folder = Path(pdf_folder).expanduser()
+    folder = pdf_folder
     found = sorted(p for p in folder.glob("*.pdf") if p.is_file())
     if not found:
         raise ValueError(f"no PDFs found in {folder}")
@@ -144,17 +155,10 @@ def _collect_pdfs(files, pdf_folder: str, staging: Path) -> tuple[list[Path], st
 
 
 def _find_pdf(name: str, cfg: dict) -> Path | None:
-    """The original PDF behind a result: work-folder, then config.yaml's pdf-folder."""
-    candidates = []
-    if cfg.get("work-folder"):  # the Upload tab keeps uploaded PDFs there
-        candidates.append(Path(cfg["work-folder"]).expanduser())
-    if cfg.get("pdf-folder"):
-        candidates.append(Path(cfg["pdf-folder"]).expanduser())
-    for base in candidates:
-        path = base / name
-        if path.is_file():
-            return path
-    return None
+    """The original PDF behind a result, in <input-folder>/transcripts."""
+    folder = folders.input_or_none(cfg, "transcripts")
+    path = folder / name if folder else None
+    return path if path and path.is_file() else None
 
 
 def _bare_pdf_name(raw: str | None) -> str:
@@ -230,20 +234,22 @@ class LetterJob(BackgroundJob):
     """The one background run that converts recommendation letters and ranks them.
 
     Each Jev call takes about a second, so a folder of letters takes minutes;
-    the FTP Upload page polls /letters/status meanwhile.  The ranks are merged
-    into <letters-folder>/letter_ranks.csv when the run ends.
+    the Recommendations Upload page polls /letters/status meanwhile.  The ranks are merged
+    into <work-folder>/letters/letter_ranks.csv when the run ends.
     """
 
-    def start(self, client, pdfs: list[Path], ranks_csv: Path, skipped: list[str]) -> bool:
-        return self._start((client, pdfs, ranks_csv), done=0, total=len(pdfs), skipped=skipped)
+    def start(self, client, pdfs: list[Path], work: Path, skipped: list[str]) -> bool:
+        """Convert ``pdfs`` to <work>/<name>.txt, rank them into <work>/letter_ranks.csv."""
+        return self._start((client, pdfs, work), done=0, total=len(pdfs), skipped=skipped)
 
     def _step(self) -> None:
         with self.lock:
             self.state["done"] += 1
 
-    def _run(self, client, pdfs: list[Path], ranks_csv: Path) -> None:
+    def _run(self, client, pdfs: list[Path], work: Path) -> None:
+        ranks_csv = work / RANKS_CSV
         try:
-            ranks, failures = rank_letters.rank_pdfs(client, pdfs, progress=self._step)
+            ranks, failures = rank_letters.rank_pdfs(client, pdfs, work, progress=self._step)
             if ranks:
                 rank_letters.merge_ranks(ranks_csv, ranks)
         except Exception as exc:  # shown on the page; the thread must not die silently
@@ -263,20 +269,17 @@ def _student_name(file: str) -> str:
 
 
 def _transcript_names(cfg: dict) -> list[str]:
-    """Every transcript PDF's name, from work-folder and pdf-folder (as _find_pdf looks)."""
-    names = set()
-    for key in ("work-folder", "pdf-folder"):
-        if cfg.get(key):
-            names.update(p.name for p in Path(cfg[key]).expanduser().glob("*.pdf"))
-    return sorted(names)
+    """Every transcript PDF's name in <input-folder>/transcripts (as _find_pdf looks)."""
+    folder = folders.input_or_none(cfg, "transcripts")
+    return sorted(p.name for p in folder.glob("*.pdf")) if folder else []
 
 
 def _letter_records(cfg: dict, transcripts: list[str]) -> tuple[list[dict], str | None]:
-    """(student_info records for ``transcripts`` and every letter in letters-folder,
-    an error message when the letters could not be read)."""
-    folder = letters_folder(cfg)
+    """(student_info records for ``transcripts`` and every letter in <input-folder>/letters,
+    ranked from <work-folder>/letters; an error message when the letters could not be read)."""
+    folder = folders.input_or_none(cfg, "letters")
     try:
-        return letter_students.folder_info(folder, transcripts), None
+        return letter_students.folder_info(letters_folder(cfg), letters_work_folder(cfg), transcripts), None
     except (OSError, ValueError, KeyError, csv.Error) as exc:
         log.error("letters from %s: %s", folder, exc)
         return letter_students.student_info(transcripts, []), f"could not read the letters in {folder}: {exc}"
@@ -291,19 +294,8 @@ def _letter_students(cfg: dict, names: dict[str, str]) -> tuple[list[dict], str 
     return [{"student": names.get(r["transcript"]) or _student_name(r["student"]),
              "file": r["transcript"] or f"{r['student']}.pdf",
              "has_transcript": r["transcript"] is not None,
-             "letters": len(r["letters"]), "group_rank": r["group_rank"],
-             "rank_order": letter_students.group_rank_order(r["group_rank"])}
+             "letters": len(r["letters"]), "group_rank": r["group_rank"]}
             for r in records if r["letters"]], error
-
-
-def _add_letter_ranks(students: list[dict], cfg: dict) -> None:
-    """Set each student's ``letter_rank`` (student_info's group_rank of their
-    recommendation letters, matched by file name) and its ``letter_rank_order``."""
-    records, _ = _letter_records(cfg, [s["file"] for s in students if s["file"]])
-    by_transcript = {r["transcript"]: r["group_rank"] for r in records if r["transcript"]}
-    for s in students:
-        s["letter_rank"] = by_transcript.get(s["file"])
-        s["letter_rank_order"] = letter_students.group_rank_order(s["letter_rank"])
 
 
 def _dev_mode(cfg: dict) -> bool:
@@ -324,20 +316,89 @@ def _student_letters(transcript: str, cfg: dict) -> dict:
     return {"letter_rank": record["group_rank"], "letters": letters}
 
 
+def _summary_rows(cfg: dict) -> list[dict]:
+    """One row per student in the union of transcripts, letters and profiles.
+
+    A student is the shared file-name key (adam_flores): <work-folder>/transcripts/<key>.common.json,
+    <input-folder>/letters/<key>_letter<N>.pdf and <work-folder>/personal/<key>.json.  The
+    name is the profile's "name", else the key title-cased."""
+    work = folders.work_or_none(cfg, "transcripts")
+    transcripts = {p.name[:-len(".common.json")] for p in work.glob("*.common.json")} if work else set()
+    letters: dict[str, int] = {}
+    inbox = folders.input_or_none(cfg, "letters")
+    for pdf in inbox.glob("*.pdf") if inbox else ():
+        letters[student_key(pdf)] = letters.get(student_key(pdf), 0) + 1
+    profiles = profile_load.load_cfg(cfg)
+    by_key = {Path(name).stem: data for name, data in profiles.items()}
+    rows = []
+    for key in sorted(transcripts | set(letters) | set(by_key)):
+        name = by_key.get(key, {}).get("name")
+        rows.append({"key": key,
+                     "name": name if isinstance(name, str) and name.strip() else _student_name(key),
+                     "profile": key in by_key, "transcript": key in transcripts,
+                     "recommendations": letters.get(key, 0)})
+    return rows
+
+
+PROFILE_SUFFIX = ".profile"  # Upload → Profiles reads these and saves <name>.json
+
+
+def _student_profile(transcript: str, cfg: dict) -> list[list] | None:
+    """The student dialog's Profile tab: [[field, value], ...] from
+    <work-folder>/personal/<key>.json, the transcript's file key; None without one."""
+    try:
+        path = profile_load.personal_work_folder(cfg) / f"{Path(transcript).stem}.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (KeyError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return [[k, v] for k, v in profile_display.fields(data).items()] if isinstance(data, dict) else None
+
+
+def _profile_table(profiles: dict[str, dict]) -> tuple[list[str], list[tuple[str, dict]]]:
+    """Column names (every key, in first-seen order) and one (file key, flat row)
+    per profile.  The file name and id_* keys are not shown."""
+    rows = [(Path(name).stem, profile_display.fields(data)) for name, data in profiles.items()]
+    columns = list(dict.fromkeys(k for _, row in rows for k in row))
+    return columns, rows
+
+
+def _dialog_results(cfg: dict) -> tuple[str, str, Path | None]:
+    """(builder, category, its <cat>_gpa.csv) for the student dialog's courses on
+    a page without its own: the active builder's first category; "" without one."""
+    try:
+        builder, built = _builder_folder(cfg, None)
+        available = _built_categories(built)
+    except (category_builder.UnknownBuilder, KeyError):
+        return "", "", None
+    category = next(iter(available), "")
+    return builder, category, available.get(category)
+
+
 def create_app(config_path: Path | None = None) -> Flask:
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
     config_path = Path(config_path or PROJECT_ROOT / "config.yaml")
     add_tool_folders(_load_config(config_path).get("tool-folders"))
+    # Every page's column names: M.state and the like explain themselves on hover.
+    app.jinja_env.globals.update(field_hint=profile_display.hint, profile_hints=profile_display.HINTS)
 
-    # The Transcripts page shows both panels; each sub-item shows one of them.
-    @app.get("/", defaults={"panel": None})
-    @app.get("/transcripts/<any('ftp-upload', 'category-build'):panel>")
-    def upload(panel):
+    @app.get("/")
+    def welcome():
+        return render_template("welcome.html", tab="welcome")
+
+    # Transcripts FTP upload and category build share one page; the old
+    # addresses lead there.
+    @app.get("/transcripts")
+    @app.get("/transcripts/category-build")
+    def upload_redirect():
+        return redirect("/transcripts/ftp-upload")
+
+    @app.get("/transcripts/ftp-upload")
+    def upload():
         cfg = _load_config(config_path)
-        return render_template("upload.html", tab=panel,
-                               pdf_folder=cfg.get("pdf-folder") or "",
-                               work_folder=cfg.get("work-folder") or "")
+        return render_template("upload.html", tab="ftp-upload",
+                               pdf_folder=folders.input_or_none(cfg, "transcripts") or "",
+                               work_folder=folders.work_or_none(cfg, "transcripts") or "")
 
     job = CategoryJob()
 
@@ -457,20 +518,23 @@ def create_app(config_path: Path | None = None) -> Flask:
 
     @app.post("/upload")
     def run_upload():
-        """Convert the uploaded PDFs (or all of pdf-folder) into work-folder.
+        """Convert the uploaded PDFs (saved in <input-folder>/transcripts), or every
+        PDF already there, into <work-folder>/transcripts.
 
         The Upload tab posts here with fetch() and shows the answer under the
         form, so this returns a status, not a page.
         """
         cfg = _load_config(config_path)
-        if not cfg.get("work-folder"):
-            return jsonify(ok=False, error="set work-folder in config.yaml"), 400
-        work = Path(cfg["work-folder"]).expanduser()
+        try:
+            inbox = folders.input_folder(cfg, "transcripts")
+            work = folders.work_folder(cfg, "transcripts")
+        except KeyError as exc:
+            return jsonify(ok=False, error=str(exc).strip("'\"")), 400
         staging = Path(tempfile.mkdtemp(prefix="browser-view-upload-"))
         try:
             try:
                 work.mkdir(parents=True, exist_ok=True)
-                pdfs, source = _collect_pdfs(request.files, cfg.get("pdf-folder") or "", staging)
+                pdfs, source = _collect_pdfs(request.files, inbox, staging)
             except (OSError, ValueError) as exc:
                 return jsonify(ok=False, error=str(exc)), 400
 
@@ -478,8 +542,9 @@ def create_app(config_path: Path | None = None) -> Flask:
             for pdf in pdfs:
                 try:
                     if pdf.parent == staging:
-                        # Keep uploads next to their txt/json so View can show them.
-                        shutil.copy2(pdf, work / pdf.name)
+                        # An upload is input: keep it with the others so View can show it.
+                        inbox.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(pdf, inbox / pdf.name)
                     doc = pdf_to_common_json(pdf, work)
                 except (OSError, ValueError) as exc:
                     failures.append({"file": pdf.name, "error": str(exc)})
@@ -495,7 +560,7 @@ def create_app(config_path: Path | None = None) -> Flask:
                        work_folder=str(work), converted=converted, failures=failures,
                        error=None if converted else "no PDF could be converted")
 
-    @app.get("/view")
+    @app.get("/transcripts/view")
     def view():
         cfg = _load_config(config_path)
         builders = category_builder.names()
@@ -518,8 +583,6 @@ def create_app(config_path: Path | None = None) -> Flask:
                 students = _read_students(available[selected], selected)
             except (OSError, ValueError, csv.Error) as exc:
                 error = f"could not read {available[selected].name}: {exc}"
-            else:
-                _add_letter_ranks(students, cfg)
         else:
             error = f"the {builder} builder has no results (*_gpa.csv) in {folder} yet"
 
@@ -536,11 +599,11 @@ def create_app(config_path: Path | None = None) -> Flask:
             error=error,
         )
 
-    @app.get("/view/student")
+    @app.get("/transcripts/view/student")
     def student_detail():
         """One student's details for the student dialog: the transcript's PDF, its
         courses when a category is given, and the recommendation letters with
-        their post_rank ranks."""
+        their post_rank ranks, and the student's profile."""
         cfg = _load_config(config_path)
         name = _bare_pdf_name(request.args.get("file"))
         if not name:
@@ -570,10 +633,11 @@ def create_app(config_path: Path | None = None) -> Flask:
             detail.update(record, courses=courses, credit_label="Credits")
 
         pdf = _find_pdf(name, cfg)
-        detail["pdf_url"] = f"/view/pdf?{urlencode({'file': name})}" if pdf else None
-        return jsonify({**detail, **_student_letters(name, cfg)})
+        detail["pdf_url"] = f"/transcripts/view/pdf?{urlencode({'file': name})}" if pdf else None
+        return jsonify({**detail, **_student_letters(name, cfg),
+                        "profile": _student_profile(name, cfg)})
 
-    @app.get("/view/pdf")
+    @app.get("/transcripts/view/pdf")
     def view_pdf():
         name = _bare_pdf_name(request.args.get("file"))
         pdf = _find_pdf(name, _load_config(config_path)) if name else None
@@ -586,21 +650,30 @@ def create_app(config_path: Path | None = None) -> Flask:
 
     @app.get("/letters/ftp-upload")
     def letters_upload():
-        folder = letters_folder(_load_config(config_path))
-        return render_template("letters_upload.html", tab="letters-upload", folder=folder)
+        cfg = _load_config(config_path)
+        return render_template("letters_upload.html", tab="letters-upload",
+                               folder=folders.input_or_none(cfg, "letters") or "(input-folder not set)",
+                               work=folders.work_or_none(cfg, "letters") or "(work-folder not set)")
 
     @app.post("/letters/upload")
     def run_letters_upload():
-        """Save the uploaded letters (else take every PDF in letters-folder), then
-        convert and rank them in the background; /letters/status reports progress.
+        """Save the uploaded letters in <input-folder>/letters (else take every PDF
+        already there), then convert them into <work-folder>/letters and rank them
+        in the background; /letters/status reports progress.
 
-        A letter with a <name>.txt was uploaded before: it is skipped, not replaced."""
+        A letter with a <name>.txt in the work folder was ranked before: it is
+        skipped, not replaced."""
         cfg = _load_config(config_path)
-        folder = letters_folder(cfg)
+        try:
+            folder = letters_folder(cfg)
+            work = letters_work_folder(cfg)
+        except KeyError as exc:
+            return jsonify(error=str(exc).strip("'\"")), 400
         try:
             client = rank_letters.jev_client(cfg)
             folder.mkdir(parents=True, exist_ok=True)
-            done = {p.stem for p in folder.glob("*.txt")}
+            work.mkdir(parents=True, exist_ok=True)
+            done = {p.stem for p in work.glob("*.txt")}
             uploads = [f for f in request.files.getlist("pdfs") if f and f.filename]
             pdfs, skipped = [], []
             if uploads:
@@ -627,9 +700,9 @@ def create_app(config_path: Path | None = None) -> Flask:
             return jsonify(error=str(exc)), 400
         if not pdfs:
             return jsonify(status="skipped", skipped=skipped)
-        if not letter_job.start(client, sorted(pdfs), folder / RANKS_CSV, sorted(skipped)):
+        if not letter_job.start(client, sorted(pdfs), work, sorted(skipped)):
             return jsonify(error="letters are already being ranked", **letter_job.snapshot()), 409
-        log.info("letters: ranking %d PDF(s) in %s", len(pdfs), folder)
+        log.info("letters: ranking %d PDF(s) from %s into %s", len(pdfs), folder, work)
         return jsonify(letter_job.snapshot())
 
     @app.get("/letters/status")
@@ -639,17 +712,15 @@ def create_app(config_path: Path | None = None) -> Flask:
     @app.get("/letters/view")
     def letters_view():
         cfg = _load_config(config_path)
-        folder = letters_folder(cfg)
+        folder = folders.input_or_none(cfg, "letters") or "(input-folder not set)"
         # The dialog shows the transcript's courses from the active builder's first
         # category; its results also give the students' full names.
         names = {}
+        builder, category, results = _dialog_results(cfg)
         try:
-            builder, built = _builder_folder(cfg, None)
-            available = _built_categories(built)
-            category = next(iter(available), "")
-            if category:
-                names = {r["file"]: r["student"] for r in _read_students(available[category], category)}
-        except (category_builder.UnknownBuilder, KeyError, OSError, ValueError, csv.Error):
+            if results:
+                names = {r["file"]: r["student"] for r in _read_students(results, category)}
+        except (OSError, ValueError, csv.Error):
             builder, category = "", ""
         rows, error = _letter_students(cfg, names)
         if not rows and not error:
@@ -661,10 +732,263 @@ def create_app(config_path: Path | None = None) -> Flask:
     @app.get("/letters/pdf")
     def letters_pdf():
         name = _bare_pdf_name(request.args.get("file"))
-        pdf = letters_folder(_load_config(config_path)) / name if name else None
+        folder = folders.input_or_none(_load_config(config_path), "letters")
+        pdf = folder / name if name and folder else None
         if pdf is None or not pdf.is_file():
             abort(404)
         return send_file(pdf, mimetype="application/pdf")
+
+    @app.get("/profiles/upload")
+    def profiles_upload():
+        cfg = _load_config(config_path)
+        return render_template("profiles_upload.html", tab="profiles-upload",
+                               folder=folders.input_or_none(cfg, "personal") or "(input-folder not set)",
+                               work=folders.work_or_none(cfg, "personal") or "(work-folder not set)")
+
+    @app.post("/profiles/upload")
+    def run_profiles_upload():
+        """Read .profile files, the uploaded ones (saved in <input-folder>/personal
+        too) or, with none chosen, every *.profile already there, and save each as
+        <work-folder>/personal/<name>.json (replacing one of that name), which
+        profile_load reads; then reload every profile into memory.
+
+        Each .profile must hold one JSON object; nothing is written unless every
+        file is valid.  A profile without "institution" or "program" gets them
+        from the transcript whose student.name is the profile's name (None if
+        none is; profile/enrich.py); the .profile itself is saved as it came."""
+        cfg = _load_config(config_path)
+        try:
+            folder = profile_load.personal_folder(cfg)
+            out = profile_load.personal_work_folder(cfg)
+        except KeyError as exc:
+            return jsonify(error=str(exc).strip("'\"")), 400
+        uploads = [f for f in request.files.getlist("profiles") if f and f.filename]
+        try:
+            sources = []  # (.profile name, its bytes, whether it is a new upload)
+            if uploads:
+                for upload in uploads:
+                    name = Path(upload.filename).name  # never trust a client path
+                    if not name.lower().endswith(PROFILE_SUFFIX):
+                        raise ValueError(f"not a {PROFILE_SUFFIX} file: {name}")
+                    sources.append((name, upload.read(), True))
+            else:
+                found = sorted(p for p in folder.glob(f"*{PROFILE_SUFFIX}") if p.is_file())
+                if not found:
+                    raise ValueError(f"no {PROFILE_SUFFIX} files found in {folder}")
+                sources = [(p.name, p.read_bytes(), False) for p in found]
+            parsed = []
+            for name, data, _ in sources:
+                try:
+                    profile = json.loads(data.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ValueError(f"{name}: not valid JSON ({exc})") from None
+                if not isinstance(profile, dict):
+                    raise ValueError(f"{name}: expected a JSON object")
+                parsed.append(profile)
+            fields = enrich.transcript_fields(folders.work_or_none(cfg, "transcripts"))
+            folder.mkdir(parents=True, exist_ok=True)
+            out.mkdir(parents=True, exist_ok=True)
+            saved, filled, unmatched = [], {}, []
+            for (name, data, uploaded), profile in zip(sources, parsed):
+                if uploaded:
+                    (folder / name).write_bytes(data)
+                json_name = name[:-len(PROFILE_SUFFIX)] + ".json"
+                added = enrich.add_missing(profile, fields)
+                if added:
+                    filled[json_name] = added
+                    if not enrich.has_transcript(profile, fields):
+                        unmatched.append(json_name)
+                (out / json_name).write_text(
+                    json.dumps(profile, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                saved.append(json_name)
+            profiles = profile_load.load(out)
+        except (OSError, ValueError) as exc:
+            return jsonify(error=str(exc)), 400
+        log.info("profiles: saved %d .json (filled in %d, no transcript for %d), "
+                 "loaded %d from %s", len(saved), len(filled), len(unmatched), len(profiles), out)
+        # filled: {file: attributes added}; unmatched: files whose added ones are empty
+        return jsonify(status="done", saved=saved, loaded=len(profiles),
+                       filled=filled, unmatched=unmatched,
+                       errors=[f"{k}: {v}" for k, v in profile_load.ERRORS.items()])
+
+    @app.get("/profiles/view")
+    def profiles_view():
+        cfg = _load_config(config_path)
+        folder = folders.work_or_none(cfg, "personal") or "(work-folder not set)"
+        profiles = profile_load.load_cfg(cfg)  # always what the folder holds now
+        columns, rows = _profile_table(profiles)
+        error = None if rows else f"no profiles in {folder} yet"
+        # The student dialog shows courses from the active builder's first category.
+        builder, category, _ = _dialog_results(_load_config(config_path))
+        return render_template("profiles_view.html", tab="profiles-view", folder=folder,
+                               columns=columns, rows=rows, error=error,
+                               skipped=profile_load.ERRORS, builder=builder, category=category,
+                               link_column="name" if "name" in columns else (columns or [""])[0])
+
+    @app.get("/summary")
+    def summary():
+        rows = _summary_rows(_load_config(config_path))
+        # (label, available, missing); a student has recommendations with one letter or more.
+        counts = [(label, n, len(rows) - n) for label, n in (
+            ("Profiles", sum(r["profile"] for r in rows)),
+            ("Transcripts", sum(r["transcript"] for r in rows)),
+            ("Recommendations", sum(r["recommendations"] > 0 for r in rows)))]
+        return render_template("summary.html", tab="summary", rows=rows, counts=counts,
+                               error=None if rows else "no transcripts, letters or profiles yet")
+
+    def _ranges(filters: dict) -> dict[str, tuple[float | None, float | None]]:
+        """{source: (low, high)} from ?<prefix>_min=&<prefix>_max= per source of
+        ``filters`` ({source: (prefix, highest value or None)}): Transcript's
+        gpa_, all_gpa_, pct_; Recommend Letter's score_, count_. A bound that is
+        not a number from 0 to the source's highest value is no bound; a
+        reversed range is swapped; a source with no bound is left out."""
+        ranges = {}
+        for source, (prefix, top) in filters.items():
+            bounds = []
+            for end in ("min", "max"):
+                try:
+                    value = float(request.args.get(f"{prefix}_{end}") or "")
+                except ValueError:
+                    value = None
+                ok = value is not None and value >= 0 and (top is None or value <= top)
+                bounds.append(value if ok else None)
+            low, high = bounds
+            if low is not None and high is not None and low > high:
+                low, high = high, low
+            if low is not None or high is not None:
+                ranges[source] = (low, high)
+        return ranges
+
+    def _profile_query(fields: dict) -> dict:
+        """Profile(...) keyword arguments from the query, for the known ``fields``
+        (summary.personal.profile_fields): ?prof_show= (repeated, in order; none
+        or no known one: institution and program, those the profiles have),
+        ?prof_min.<field>=/?prof_max.<field>= (a range field: a number, or an
+        ISO date for birth_date; a bad bound is no bound, a reversed range is
+        swapped) and ?prof_in.<field>= (a list field's list[str]: one value per
+        line, or repeated; blank lines and repeats, ignoring case, dropped; none
+        given: summary.personal.DEFAULT_VALUES, sex M and F).
+        Only a shown field filters: the others' filters are dropped."""
+        show = [f for f in request.args.getlist("prof_show") if f in fields]
+        if not show:
+            show = [f for f in PROFILE_SHOW if f in fields] or list(fields)[:1] or list(PROFILE_SHOW)
+        ranges, values = {}, {}
+        for name, f in fields.items():
+            if name not in show:
+                continue
+            if f.kind == "list":
+                picked: dict[str, str] = {}
+                for raw in request.args.getlist(f"prof_in.{name}"):
+                    for line in raw.splitlines():
+                        if line.strip():
+                            picked.setdefault(line.strip().casefold(), line.strip())
+                if picked:
+                    values[name] = list(picked.values())
+                elif name in PROFILE_VALUES:  # sex: M and F unless a list is given
+                    values[name] = list(PROFILE_VALUES[name])
+                continue
+            bounds = []
+            for end in ("min", "max"):
+                raw = (request.args.get(f"prof_{end}.{name}") or "").strip()
+                if f.kind == "date":
+                    bounds.append(raw if ISO_DATE.fullmatch(raw) else None)
+                    continue
+                try:
+                    bounds.append(float(raw))
+                except ValueError:
+                    bounds.append(None)
+            low, high = bounds
+            if low is not None and high is not None and low > high:
+                low, high = high, low
+            if low is not None or high is not None:
+                ranges[name] = (low, high)
+        return dict(show=show, ranges=ranges, values=values)
+
+    def _profile_params(query: dict) -> list[tuple[str, str]]:
+        """The applied Profile choice as (name, value) query params, for the other
+        dialogs' hidden inputs."""
+        params = [("prof_show", f) for f in query["show"]]
+        for name, (low, high) in query["ranges"].items():
+            for end, value in (("min", low), ("max", high)):
+                if value is not None:
+                    params.append((f"prof_{end}.{name}", value if isinstance(value, str) else f"{value:g}"))
+        params += [(f"prof_in.{name}", v) for name, vs in query["values"].items() for v in vs]
+        return params
+
+    @app.get("/view/summary")
+    def view_summary():
+        """One row per student name of every upload type, one column per ranked
+        object: Transcript (three sub-columns, from the active builder: ?category=;
+        ?by= category-gpa, all-courses-gpa or category-pct is the one sorted first; ?gpa_min=/?gpa_max=, ?all_gpa_min=/
+        ?all_gpa_max= and ?pct_min=/?pct_max= keep only the students in those
+        ranges), Recommend Letter (Score and Count; ?score_min=/?score_max= and
+        ?count_min=/?count_max= keep only the students in those ranges) and
+        Profile (one sub-column per ?prof_show= field, filtered: _profile_query)."""
+        cfg = _load_config(config_path)
+        by = request.args.get("by")
+        by = by if by in TRANSCRIPT_SOURCES else DEFAULT_SOURCE
+        ranges = _ranges(TRANSCRIPT_FILTERS)
+        rec_ranges = _ranges(LETTER_FILTERS)
+        prof_fields = profile_fields(cfg)
+        prof_query = _profile_query(prof_fields)
+        profile = Profile(cfg, **prof_query)
+        page = dict(tab="view-summary", builder=category_builder.active(cfg), categories=[],
+                    selected="", by=by, sources={k: label for k, (_, label) in TRANSCRIPT_SOURCES.items()},
+                    source_label=source_label, filters=TRANSCRIPT_FILTERS, ranges=ranges,
+                    range_label=range_label, rec_ranges=rec_ranges, rec_filters=LETTER_FILTERS,
+                    rec_sources=LETTER_SOURCES, rec_range_label=letter_range_label,
+                    source_hint=source_hint, source_hints=TRANSCRIPT_HINTS, rec_hints=LETTER_HINTS,
+                    prof_fields=prof_fields, prof=prof_query, prof_labels=profile.labels(),
+                    prof_default_values=PROFILE_VALUES,
+                    prof_params=_profile_params(prof_query),
+                    names=[], keys={}, columns=[], groups=[], sort_col=1, valid=set(), error=None,
+                    # each Config column's meaning: its hover text
+                    descriptions={"Transcript": transcript_description(),
+                                  "Recommend Letter": LETTER_DESCRIPTION, "Profile": PROFILE_DESCRIPTION})
+        objects = []
+        # The Transcript column uses the active builder; its dialog picks the category.
+        try:
+            builder, folder = _builder_folder(cfg, None)
+            available = list(_built_categories(folder))
+        except (category_builder.UnknownBuilder, KeyError) as exc:
+            page["error"] = str(exc).strip("'\"")
+        else:
+            selected = (request.args.get("category") or "").upper()
+            if selected not in available:  # STEM when built, else the first category
+                selected = DEFAULT_CATEGORY if DEFAULT_CATEGORY in available else next(iter(available), "")
+            page.update(builder=builder, categories=available, selected=selected)
+            page["descriptions"]["Transcript"] = transcript_description(selected)
+            if selected:
+                transcript = Transcript(cfg, builder, selected, by, ranges)
+                objects.append(transcript)
+            else:
+                page["error"] = (f"the {builder} builder has no results (*_gpa.csv) in {folder} yet,"
+                                 " so there is no Transcript column")
+        recommendation = Recommendation(cfg, rec_ranges)
+        objects.append(recommendation)
+        objects.append(profile)
+        try:
+            keys = name_keys(cfg)  # name -> file key, for the student dialog
+            names = list(keys)  # every name is a row (View's All)
+            # each column applies only its own filter: a name it leaves out is – there only
+            columns = summary_table(objects, names)
+        except (KeyError, OSError, ValueError, csv.Error) as exc:
+            page["error"] = f"could not build the summary: {exc}"
+        else:
+            # Valid: a name with a value in every column (View's All / Valid choice),
+            # so one that passes every column's filter.
+            valid = {n for n in names if columns and all(c.orders[n] is not None for c in columns)}
+            # The page opens sorted by the Transcript's Rank by sub-column, else (no
+            # Transcript column) by the Recommend Letter's Score, else by the first column.
+            header = summary_groups(columns)
+            want = ((transcript.title, source_label(by, page["selected"])) if page["selected"]
+                    else (recommendation.title, LETTER_SOURCES["group-rank"]))
+            sort_col = next((i for g in header for i, c in g.cols if (c.group, c.title) == want), 1)
+            page.update(names=names, keys=keys, columns=columns, groups=header,
+                        sort_col=sort_col, valid=valid)
+            if not names:
+                page["error"] = page["error"] or "no transcripts, letters or profiles yet"
+        return render_template("view_summary.html", **page)
 
     @app.get("/favicon.ico")
     def favicon():

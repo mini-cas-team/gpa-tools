@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block title %}Transcripts and Recommendation Letters — welcome{% endblock %}
+
+{% block body %}
+<div class="help">
+<p>Welcome. This tool computes a per-student category GPA (STEM, MEDICAL, ...)
+from transcript PDFs and ranks recommendation letters. Pick a page in the left
+bar, or start here:</p>
+
+<h2>Upload</h2>
+<ul>
+  <li><a href="/transcripts/ftp-upload">Transcripts</a>: convert transcript PDFs, then define a category and build its GPAs.</li>
+  <li><a href="/letters/ftp-upload">Recommendations</a>: convert and rank letter PDFs.</li>
+  <li><a href="/profiles/upload">Profiles</a>: add student profile JSON files.</li>
+  <li><a href="/summary">Summary</a>: which students have a profile, a transcript and letters.</li>
+</ul>
+
+<h2>View</h2>
+<ul>
+  <li><a href="/transcripts/view">Transcripts</a>: every student's category GPA, with their courses and transcript.</li>
+  <li><a href="/letters/view">Recommendations</a>: each letter's rank.</li>
+  <li><a href="/profiles/view">Profiles</a>: every student profile.</li>
+  <li><a href="/view/summary">Rank</a>: each student's rank from every source, side by side.</li>
+</ul>
+</div>
+{% endblock %}

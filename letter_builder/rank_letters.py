@@ -1,9 +1,10 @@
-"""python -m letter_builder.rank_letters [--folder DIR] [--out FILE] [--config config.yaml]
+"""python -m letter_builder.rank_letters [--work DIR] [--out FILE] [--config config.yaml]
 
-Asks TypeSafe's Jev to rank each <name>.txt in the folder (default:
-config.yaml's letters-folder) as an excellent, good or normal recommendation
-letter, one `choice` question per letter, and writes filename,rank,confidence
-to --out (default <folder>/letter_ranks.csv) once every letter is ranked.
+Asks TypeSafe's Jev to rank each <name>.txt in the work folder (default
+<work-folder>/letters, where pdf2txt writes them) as an excellent, good or
+normal recommendation letter, one `choice` question per letter, and writes
+filename,rank,confidence to --out (default <work>/letter_ranks.csv) once every
+letter is ranked.
 Model, API URL and the API key's environment variable come from config.yaml's
 category-builder: jev: section.
 """
@@ -49,15 +50,16 @@ def rank(client: JevClient, letter: str) -> tuple[str, float]:
     return answer["choice"], float(answer.get("confidence") or 0)
 
 
-def rank_pdfs(client: JevClient, pdfs: list[Path], progress=None):
-    """Convert and rank each PDF: ([(txt name, rank, confidence)], [{file, error}]).
+def rank_pdfs(client: JevClient, pdfs: list[Path], work: Path, progress=None):
+    """Convert each PDF to <work>/<name>.txt and rank it:
+    ([(txt name, rank, confidence)], [{file, error}]).
 
     ``progress()`` is called after each PDF, ranked or not.
     """
     ranks, failures = [], []
     for pdf in pdfs:
         try:
-            txt = pdf2txt.convert_one(pdf)
+            txt = pdf2txt.convert_one(pdf, work)
             ranks.append((txt.name, *rank(client, txt.read_text(encoding="utf-8"))))
         except (ValueError, JevError, OSError) as exc:
             failures.append({"file": pdf.name, "error": str(exc)})
@@ -91,8 +93,8 @@ def merge_ranks(path: Path, ranks: list[tuple[str, str, float]]) -> None:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--out", type=Path, help=f"default: <folder>/{RANKS_CSV}")
-    args, raw, folder = parse_cli(parser, argv)
+    parser.add_argument("--out", type=Path, help=f"default: <work>/{RANKS_CSV}")
+    args, raw, _, folder = parse_cli(parser, argv)
     out = (args.out or folder / RANKS_CSV).expanduser()
     try:
         client = jev_client(raw)

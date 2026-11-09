@@ -103,7 +103,7 @@ def test_template_is_valid_yaml_with_every_key():
                                               "ollama-url": "http://localhost:11434"}
     assert "model" not in cfg["category-definer"]
     assert cfg["category-builder"]["jev"] == {
-        "model": "jev-1.13.0", "api-url": "https://api.typesafe.ai/v1/systemone",
+        "model": "jev-1.14.0", "api-url": "https://api.typesafe.ai/v1/systemone",
         "api-key-env": "GPA_TOOLS_KEY", "threshold": 0.5, "batch-size": 20}
     assert cfg["active-category-builder"] == "llm"
     assert cfg["category-definer"]["mode"] == "dev"
@@ -122,6 +122,8 @@ def test_configure_creates_config_from_the_template(tmp_path, capsys):
     for key, sub in configure.FOLDERS.items():
         assert cfg[key] == (data / sub).as_posix()
         assert (data / sub).is_dir()
+    for component in ("transcripts", "letters", "personal"):  # input and work, one each
+        assert (data / component).is_dir() and (data / "work" / component).is_dir()
     assert cfg["category-builder"]["llm"] == {"category-build-model": "qwen2.5:7b",
                                               "category-definition-model": "qwen2.5:14b",
                                               "ollama-url": "http://box:11434"}
@@ -145,9 +147,10 @@ def test_configure_changes_only_what_it_is_given(tmp_path):
 def test_a_folder_option_overrides_data(tmp_path):
     config = tmp_path / "config.yaml"
     configure.main(["--config", str(config), "--data", str(tmp_path / "d"),
-                    "--pdf-folder", str(tmp_path / "pdfs"), "--no-mkdir"])
+                    "--input-folder", str(tmp_path / "in"), "--no-mkdir"])
     cfg = yaml.safe_load(config.read_text(encoding="utf-8"))
-    assert cfg["pdf-folder"] == (tmp_path / "pdfs").as_posix()
+    assert cfg["input-folder"] == (tmp_path / "in").as_posix()
+    assert cfg["components"] == ["transcripts", "letters", "personal"]
     assert cfg["work-folder"] == (tmp_path / "d" / "work").as_posix()
 
 
@@ -171,7 +174,7 @@ def test_a_new_config_loads_in_llm_category_and_browser_view(tmp_path):
     config = tmp_path / "config.yaml"
     configure.main(["--config", str(config), "--data", str(tmp_path / "d")])
     cfg = llm_run.load_config(config)
-    assert cfg["model"] == "qwen2.5:3b" and cfg["in"] == tmp_path / "d" / "work"
+    assert cfg["model"] == "qwen2.5:3b" and cfg["in"] == tmp_path / "d" / "work" / "transcripts"
     assert cfg["folder"] == tmp_path / "d" / "work" / "llm"
     assert Definitions(config).data == {}
     assert create_app(config).test_client().get("/categories").get_json()["names"] == []
@@ -246,7 +249,7 @@ def test_configure_sets_jev_and_the_active_builder(tmp_path, capsys):
 def test_check_reports_jev_without_revealing_the_key(monkeypatch):
     monkeypatch.delenv("GPA_TOOLS_KEY", raising=False)
     info = check.jev_info({})
-    assert info == {"model": "jev-1.13.0", "api-url": "https://api.typesafe.ai/v1/systemone",
+    assert info == {"model": "jev-1.14.0", "api-url": "https://api.typesafe.ai/v1/systemone",
                     "api-key-env": "GPA_TOOLS_KEY", "key_set": False}
 
     probed = []
@@ -256,7 +259,7 @@ def test_check_reports_jev_without_revealing_the_key(monkeypatch):
     info = check.jev_info({"category-builder": {"jev": {"model": "jev", "api-key-env": "K"}}})
     assert probed == ["secret-value"] and info["key_set"] and info["model_ok"] is False
     assert "secret-value" not in str(info)
-    assert check.jev_model_ok("jev-1.13.0", []) and check.jev_model_ok("jev-latest", ["jev-latest"])
+    assert check.jev_model_ok("jev-1.14.0", []) and check.jev_model_ok("jev-latest", ["jev-latest"])
     assert check.jev_models_url("https://api.typesafe.ai/v1/systemone") == \
         "https://api.typesafe.ai/v1/models"
 
@@ -277,7 +280,7 @@ def test_jev_check_needs_the_key_and_asks_one_question(monkeypatch, capsys):
 
     monkeypatch.setenv("GPA_TOOLS_KEY", "secret-value")
     monkeypatch.setattr("jev_category.client.JevClient", FakeClient)
-    assert jev_check.main(["ask", "jev-1.13.0"]) == 0
+    assert jev_check.main(["ask", "jev-1.14.0"]) == 0
     out = capsys.readouterr().out
     assert '"score": 0.97' in out and "secret-value" not in out
 
@@ -304,3 +307,70 @@ def test_configure_points_out_the_older_model_keys(tmp_path, capsys):
     assert "category-definer.model is from an older config.yaml" in out
     llm = yaml.safe_load(config.read_text(encoding="utf-8"))["category-builder"]["llm"]
     assert (llm["category-build-model"], llm["category-definition-model"]) == ("c", "c")
+
+
+# ---- setup_venv: which Python makes .venv ------------------------------------
+
+import setup_venv  # noqa: E402
+
+
+def _py(version, path=None):
+    return {"path": path or f"/usr/bin/python{version[:4]}", "version": version,
+            "supported": check.supported(version)}
+
+
+def _info(candidates=None, venv=None, uv=None):
+    return {"candidates": candidates or {}, "uv": uv,
+            "venv": venv or {"exists": False}}
+
+
+def test_setup_venv_prefers_3_14_then_3_12():
+    both = {"python3": _py("3.13.1"), "python3.12": _py("3.12.3"), "python3.14": _py("3.14.4")}
+    p = setup_venv.plan(_info(both))
+    assert p["action"] == "create" and p["python"] == "3.14.4"
+    assert p["commands"][0] == ["/usr/bin/python3.14", "-m", "venv", str(check.VENV)]
+    assert p["commands"][1][1:4] == ["-m", "pip", "install"] and "pytest" in p["commands"][1]
+    only_312 = {"python3": _py("3.12.3", "/usr/bin/python3")}
+    assert setup_venv.plan(_info(only_312))["commands"][0][0] == "/usr/bin/python3"
+
+
+def test_setup_venv_runs_the_windows_launcher_with_its_version_flag():
+    p = setup_venv.plan(_info({"py -3.12": _py("3.12.8", "C:/Windows/py.exe")}))
+    assert p["commands"][0][:2] == ["C:/Windows/py.exe", "-3.12"]
+
+
+def test_setup_venv_falls_back_to_uv_then_stops():
+    unsupported = {"python3": _py("3.11.9")}
+    p = setup_venv.plan(_info(unsupported, uv="/home/u/.local/bin/uv"))
+    assert p["action"] == "uv"
+    assert p["commands"][0] == ["/home/u/.local/bin/uv", "venv", "--python", "3.14", str(check.VENV)]
+    p = setup_venv.plan(_info(unsupported))
+    assert p["action"] == "no-python" and "astral.sh/uv" in p["why"] and not p["commands"]
+
+
+def test_setup_venv_keeps_or_completes_a_supported_venv():
+    ok = {"exists": True, "version": "3.12.3", "supported": True, "missing_packages": []}
+    assert setup_venv.plan(_info({"python3.14": _py("3.14.4")}, ok))["action"] == "ok"
+    missing = {**ok, "missing_packages": ["flask"]}
+    p = setup_venv.plan(_info({}, missing))
+    assert p["action"] == "install" and len(p["commands"]) == 1 and "flask" in p["why"]
+
+
+def test_setup_venv_replaces_an_unsupported_venv_only_with_rebuild():
+    old = {"exists": True, "version": "3.13.1", "supported": False, "missing_packages": []}
+    found = {"python3.12": _py("3.12.3")}
+    assert setup_venv.plan(_info(found, old))["action"] == "rebuild-needed"
+    p = setup_venv.plan(_info(found, old), rebuild=True)
+    assert p["action"] == "create" and p["remove"] and p["python"] == "3.12.3"
+
+
+def test_setup_venv_uses_the_python_it_is_given():
+    found = {"python3.14": _py("3.14.4")}
+    p = setup_venv.plan(_info(found), python=_py("3.12.3", "/opt/py312/bin/python3"))
+    assert p["commands"][0][0] == "/opt/py312/bin/python3" and p["python"] == "3.12.3"
+    assert setup_venv.plan(_info(found), python=_py("3.11.2"))["action"] == "no-python"
+    assert setup_venv.plan(_info(found), python={"path": "/x", "version": "", "supported": False})["action"] == "no-python"
+    venv312 = {"exists": True, "version": "3.12.3", "supported": True, "missing_packages": []}
+    assert setup_venv.plan(_info(found, venv312), python=_py("3.12.3"))["action"] == "ok"
+    assert setup_venv.plan(_info(found, venv312), python=_py("3.14.4"))["action"] == "rebuild-needed"
+    assert setup_venv.plan(_info(found, venv312), rebuild=True, python=_py("3.14.4"))["remove"]

@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}Transcripts and Recommendation Letters — profiles view{% endblock %}
+
+{% block body %}
+<div class="view-controls">
+  <div class="grow">
+    <label for="profile-filter">Search</label>
+    <input type="text" id="profile-filter" placeholder="Any field">
+  </div>
+  <button type="button" class="secondary" onclick="location.reload()"
+          title="Read the personal folder again, e.g. after an upload">Reload</button>
+</div>
+
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+{% if skipped %}
+  <div class="error">Skipped {{ skipped|length }} file(s):
+    <ul class="notes">{% for name, why in skipped.items() %}<li>{{ name }}: {{ why }}</li>{% endfor %}</ul>
+  </div>
+{% endif %}
+
+{% if rows %}
+  <h2>Profiles</h2>
+  <p class="hint" style="margin-top:-.4rem">
+    One row per JSON file in <code>{{ folder }}</code>; nested fields are shown as
+    <code>parent.field</code>, and each residence as three columns, country, state and
+    city: <code>M.</code> the major residence, <code>S.</code> the second one (hover a
+    column name). Click a column name to sort; click a row to highlight it, or a
+    student's name to open their details.
+    <span id="shown-count"></span>
+  </p>
+  <div class="table-wrap scroll">
+  <table id="profiles">
+    <thead>
+      <tr>
+        {% for c in columns %}<th{% if field_hint(c) %} title="{{ field_hint(c) }}"{% endif %}><button type="button" class="sort">{{ c }}</button></th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for key, row in rows %}
+      <tr>
+        {% for c in columns %}{% set v = row.get(c) %}
+        {% if c == link_column and v is not none %}
+        <td><a href="#" class="student-link" data-file="{{ key }}.pdf">{{ v }}</a></td>
+        {% else %}<td>{{ '–' if v is none else v }}</td>{% endif %}
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+{% endif %}
+
+{% include "_student_dialog.html" %}
+{% include "_sort_table.html" %}
+
+<script>
+(() => {
+  const table = document.getElementById("profiles");
+  if (!table) return;
+  sortableTable(table);
+  const body = table.tBodies[0];
+  const input = document.getElementById("profile-filter");
+  const shown = document.getElementById("shown-count");
+  function filter() {
+    const want = input.value.trim().toLowerCase();
+    let count = 0;
+    for (const row of body.rows) {
+      row.hidden = Boolean(want) && !row.textContent.toLowerCase().includes(want);
+      if (!row.hidden) count++;
+    }
+    const total = body.rows.length;
+    shown.textContent = count === total ? `${total} profiles.` : `Showing ${count} of ${total} profiles.`;
+  }
+  input.addEventListener("input", filter);
+  filter();
+
+  // A click highlights its row; the student link opens the dialog.
+  studentRows(body, { builder: {{ builder|tojson }}, category: {{ category|tojson }} });
+})();
+</script>
+{% endblock %}

@@ -1,7 +1,7 @@
 """Category builders: the registry, and what every builder shares.
 
 A category builder reads the per-student ``*.common.json`` files in
-work-folder, decides which courses belong to a category, and writes two CSVs
+<work-folder>/transcripts/, decides which courses belong to a category, and writes two CSVs
 into its own folder, ``<work-folder>/<name>/`` (see ``common.write_outputs``):
 
     <cat>_gpa.csv       one row per student: category GPA and course counts
@@ -27,6 +27,8 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 from types import ModuleType
+
+import folders
 
 # name -> module implementing the builder functions above
 BUILDERS = {
@@ -87,9 +89,13 @@ def llm_models(cfg: dict) -> dict:
 
 
 def work_folder(cfg: dict) -> Path:
-    if not cfg.get("work-folder"):
-        raise KeyError("work-folder is not set in config.yaml")
-    return Path(cfg["work-folder"]).expanduser()
+    """config.yaml's work-folder (KeyError when it is not set)."""
+    return folders.work_root(cfg)
+
+
+def transcripts_folder(cfg: dict) -> Path:
+    """Where every builder reads the *.common.json: <work-folder>/transcripts/."""
+    return folders.work_folder(cfg, "transcripts")
 
 
 def folder(cfg: dict, name: str) -> Path:

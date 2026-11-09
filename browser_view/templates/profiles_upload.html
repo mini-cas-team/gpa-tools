@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block title %}Transcripts and Recommendation Letters — profiles upload{% endblock %}
+
+{% block body %}
+<section aria-labelledby="profiles-heading" class="help">
+<h2 id="profiles-heading" style="margin-top:0">Profiles Upload</h2>
+<form id="profiles-form" method="post" action="/profiles/upload" enctype="multipart/form-data">
+  <fieldset>
+    <legend>Student profiles</legend>
+    <label for="profile-files">Upload profiles</label>
+    <input type="file" id="profile-files" name="profiles" accept=".profile" multiple>
+    <p class="hint">One <code>&lt;name&gt;.profile</code> per student, holding one JSON object.
+      Leave empty to take every <code>.profile</code> already in <code>{{ folder }}</code>,
+      <code>&lt;input-folder&gt;/personal</code> in config.yaml.</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Output</legend>
+    <p class="hint" style="margin-top:0">Each becomes <code>&lt;name&gt;.json</code> in
+      <code>{{ work }}</code>, replacing one of that name; uploaded <code>.profile</code>
+      files are saved in <code>{{ folder }}</code>. The <code>.json</code> files are what View → Profiles,
+      Summary and Rank read. Nothing is written if any file is not a JSON object.
+      A profile without an <code>institution</code> or <code>program</code> gets it from
+      the transcript whose student name is the profile's <code>name</code>; the
+      <code>.profile</code> itself is not changed.</p>
+  </fieldset>
+  <button type="submit">Upload</button>
+</form>
+<div id="profiles-status" class="status" role="status" aria-live="polite" hidden></div>
+</section>
+
+<script>
+(() => {
+  const form = document.getElementById("profiles-form");
+  const button = form.querySelector("button[type=submit]");
+  const status = document.getElementById("profiles-status");
+
+  // textContent throughout: messages carry file names.
+  function show(kind, title, lines = [], link = null) {
+    const box = document.createElement("div");
+    box.className = kind;
+    const head = document.createElement("strong");
+    head.textContent = title;
+    box.append(head);
+    if (link) {
+      const a = document.createElement("a");
+      a.href = link.href;
+      a.textContent = link.text;
+      box.append(" ", a);
+    }
+    if (lines.length) {
+      const list = document.createElement("ul");
+      list.className = "notes";
+      for (const line of lines) {
+        const item = document.createElement("li");
+        item.textContent = line;
+        list.append(item);
+      }
+      box.append(list);
+    }
+    status.replaceChildren(box);
+    status.hidden = false;
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    button.disabled = true;
+    show("running", "Uploading…");
+    try {
+      const response = await fetch(form.action, { method: "POST", body: new FormData(form) });
+      const data = await response.json().catch(() => ({ error: `server returned ${response.status}` }));
+      if (!response.ok) throw new Error(data.error);
+      const skipped = data.errors.map(e => `skipped ${e}`);
+      const unmatched = data.unmatched.map(n =>
+        `${n}: no transcript with this name, so ${data.filled[n].join(" and ")} left empty`);
+      const filled = Object.keys(data.filled).length - data.unmatched.length;
+      show(skipped.length ? "error" : "ok",
+        `Saved ${data.saved.length} .json file(s); ${data.loaded} profile(s) loaded` +
+        (filled ? `; ${filled} filled in from their transcript` : "") + ".",
+        [...skipped, ...unmatched], { href: "/profiles/view", text: "View profiles" });
+      form.reset();
+    } catch (err) {
+      show("error", `Error: ${err.message}`);
+    } finally {
+      button.disabled = false;
+    }
+  });
+})();
+</script>
+{% endblock %}

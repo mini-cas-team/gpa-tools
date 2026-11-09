@@ -1,3 +1,4 @@
+# Python 3.14 or 3.12 (install/check.py PYTHON_SUPPORTED)
 PyYAML>=6.0
 Flask>=3.0
 playwright>=1.45 # category-definer drives ChatGPT/Gemini in the installed Chrome

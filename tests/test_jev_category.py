@@ -61,9 +61,9 @@ def test_load_config_defaults_and_overrides(tmp_path):
     config = tmp_path / "config.yaml"
     config.write_text("work-folder: /w\n", encoding="utf-8")
     cfg = jev_run.load_config(config)
-    assert cfg["folder"] == cfg["in"] / "jev"
+    assert cfg["in"].as_posix() == "/w/transcripts" and cfg["folder"].as_posix() == "/w/jev"
     assert (cfg["model"], cfg["url"], cfg["key_env"], cfg["threshold"], cfg["batch_size"]) == (
-        "jev-1.13.0", "https://api.typesafe.ai/v1/systemone", "GPA_TOOLS_KEY", 0.5, 20)
+        "jev-1.14.0", "https://api.typesafe.ai/v1/systemone", "GPA_TOOLS_KEY", 0.5, 20)
     config.write_text("work-folder: /w\ncategory-builder:\n  jev:\n    model: jev-latest\n"
                       "    api-url: http://h/v1\n    threshold: 0.7\n    batch-size: 5\n",
                       encoding="utf-8")
@@ -77,18 +77,18 @@ def test_client_sends_one_noul_per_course_and_reads_scores(monkeypatch):
 
     def urlopen(req, timeout):
         sent.append((req, json.loads(req.data)))
-        return io.BytesIO(json.dumps({"model": "jev-1.13.0", "answers": {
+        return io.BytesIO(json.dumps({"model": "jev-1.14.0", "answers": {
             "q01": {"type": "noul", "noul": 0.98}, "q02": {"type": "noul", "noul": 0.04}},
             "usage": {"input_tokens": 500, "output_tokens": 20}}).encode())
 
     monkeypatch.setattr("jev_category.client.urllib.request.urlopen", urlopen)
-    client = JevClient("http://h/v1/systemone", "jev-1.13.0", "secret")
+    client = JevClient("http://h/v1/systemone", "jev-1.14.0", "secret")
     scores, usage = client.scores("STEM", "Def.", [("MATH 1", "Calc"), ("FREN 1", "French")])
     assert scores == [0.98, 0.04] and usage["input_tokens"] == 500
     req, body = sent[0]
     assert req.full_url == "http://h/v1/systemone"
     assert req.get_header("Authorization") == "Bearer secret"
-    assert body["model"] == "jev-1.13.0"
+    assert body["model"] == "jev-1.14.0"
     assert body["state"] == {"category": "STEM", "definition": "Def.",
                              "course_01": "MATH 1 - Calc", "course_02": "FREN 1 - French"}
     assert body["questions"]["q02"]["type"] == "noul"
@@ -114,9 +114,9 @@ def test_client_retries_rate_limits_and_reports_errors(monkeypatch):
 
 def test_score_cache_keeps_scores_and_resets_on_model_change(tmp_path):
     path = tmp_path / "cache.json"
-    cache = ScoreCache(path, "def", "jev-1.13.0")
+    cache = ScoreCache(path, "def", "jev-1.14.0")
     cache.put_many({("math 1", "Calc"): 0.97, ("ENGL 1", "Essay"): 0.03}, seconds=0.4)
-    again = ScoreCache(path, "def", "jev-1.13.0")
+    again = ScoreCache(path, "def", "jev-1.14.0")
     assert again.get("MATH 1", "calc") == 0.97 and again.timing == {"count": 2, "seconds": 0.4}
     assert ScoreCache(path, "def", "jev-latest").reset
 

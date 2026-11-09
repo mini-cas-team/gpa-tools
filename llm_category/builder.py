@@ -1,6 +1,6 @@
 """The llm category builder: a local LLM (Ollama) decides course membership.
 
-Reads the per-student ``*.common.json`` in work-folder, asks the LLM whether
+Reads the per-student ``*.common.json`` in <work-folder>/transcripts/, asks the LLM whether
 each distinct course belongs to the category (answers are cached), and writes
 the builder CSVs into <work-folder>/llm/.  Settings come from config.yaml:
 
@@ -39,7 +39,7 @@ def load_config(path: Path) -> dict:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     models = category_builder.llm_models(raw)
     return {
-        "in": category_builder.work_folder(raw),
+        "in": category_builder.transcripts_folder(raw),
         "folder": category_builder.folder(raw, NAME),
         "log": Path(raw.get("log-folder") or "log").expanduser(),
         "model": models["category-build-model"],

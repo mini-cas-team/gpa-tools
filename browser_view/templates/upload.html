@@ -3,17 +3,18 @@
 {% block title %}Transcripts and Recommendation Letters — upload{% endblock %}
 
 {% block body %}
-{# tab: none (/) shows both panels; ftp-upload or category-build shows just that one. #}
-<div class="split{% if tab %} single{% endif %}">
-<section aria-labelledby="upload-heading" {% if tab == "category-build" %}hidden{% endif %}>
-<h2 id="upload-heading">{% if tab %}Upload{% else %}<a href="/transcripts/ftp-upload">Upload</a>{% endif %}</h2>
+{# Transcripts FTP upload on the left, category build on the right. #}
+<div class="split">
+<section aria-labelledby="upload-heading">
+<h2 id="upload-heading">Transcripts Upload</h2>
 <form id="upload-form" method="post" action="/upload" enctype="multipart/form-data">
   <fieldset>
     <legend>PDF input</legend>
     <label for="pdfs">Upload transcripts</label>
     <input type="file" id="pdfs" name="pdfs" accept="application/pdf,.pdf" multiple>
     <p class="hint">Leave empty to convert every PDF in the configured folder,
-      <code>{{ pdf_folder or "(pdf-folder not set)" }}</code>.</p>
+      <code>{{ pdf_folder or "(transcripts is not a component)" }}</code>
+      (<code>&lt;input-folder&gt;/transcripts</code>). Uploaded PDFs are saved there.</p>
   </fieldset>
 
   <fieldset>
@@ -21,7 +22,7 @@
     <p class="hint" style="margin-top:0">Each PDF becomes <code>&lt;name&gt;.txt</code>
       (<code>pdftotext -layout</code>) and <code>&lt;name&gt;.common.json</code>
       (common format with per-course GPA, the input llm_category reads) in <code>{{ work_folder or "(work-folder not set)" }}</code>,
-      the <code>work-folder</code> in config.yaml. Uploaded PDFs are saved there too.
+      <code>&lt;work-folder&gt;/transcripts</code> in config.yaml.
       Files with the same name are replaced.</p>
   </fieldset>
 
@@ -31,8 +32,8 @@
 <div id="status" class="status" role="status" aria-live="polite" hidden></div>
 </section>
 
-<section aria-labelledby="category-heading" {% if tab == "ftp-upload" %}hidden{% endif %}>
-<h2 id="category-heading">{% if tab %}Categories{% else %}<a href="/transcripts/category-build">Categories</a>{% endif %}</h2>
+<section aria-labelledby="category-heading">
+<h2 id="category-heading">Category Build</h2>
 <fieldset>
   <legend>Category definitions</legend>
   <div class="category-bar">
@@ -51,7 +52,7 @@
     <label for="category-text">Definition of <span id="category-update-name"></span></label>
     <textarea id="category-text" name="definition" rows="9" required></textarea>
     <p class="hint">Go saves the definition to config.yaml and runs the selected builder
-      on every student in the work-folder, in the background; the result is then
+      on every student in <code>&lt;work-folder&gt;/transcripts</code>, in the background; the result is then
       published to out-folder.</p>
     <div class="dialog-actions">
       <button type="submit" id="category-update-go">Go</button>
@@ -350,7 +351,7 @@
     }
     if (state.status === "done") {
       const link = document.createElement("a");
-      link.href = `/view?${new URLSearchParams({ builder: state.builder, category: state.category })}`;
+      link.href = `/transcripts/view?${new URLSearchParams({ builder: state.builder, category: state.category })}`;
       link.textContent = "Open in View";
       showStatus("ok", [`${state.category} built by ${state.builder} in ${minutes(state.elapsed)} ` +
         `and published to ${state.published}. `, link]);

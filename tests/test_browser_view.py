@@ -17,10 +17,10 @@ GPA_HEADER = ("student,institution,program,STEM_GPA,all_courses_GPA,"
 
 @pytest.fixture
 def folders(tmp_path):
-    """work-folder/llm with STEM results, pdf-folder with ann.pdf, and config.yaml."""
-    built, pdfs = tmp_path / "work" / "llm", tmp_path / "pdfs"
+    """work-folder/llm with STEM results, <input-folder>/transcripts with ann.pdf, and config.yaml."""
+    built, pdfs = tmp_path / "work" / "llm", tmp_path / "in" / "transcripts"
     built.mkdir(parents=True)
-    pdfs.mkdir()
+    pdfs.mkdir(parents=True)
     (pdfs / "ann.pdf").write_bytes(b"%PDF-1.4 ann")
     (built / "stem_gpa.csv").write_text(
         GPA_HEADER
@@ -32,9 +32,8 @@ def folders(tmp_path):
         "Ann Lee,ann.pdf,Fall 2024,ENGL 101,Writing,B,3.0,3.0,no\n"
         "Bob Ray,bob.pdf,Fall 2024,HIST 101,Rome,A,3.0,4.0,no\n")
     config = tmp_path / "config.yaml"
-    config.write_text(f"# my settings\npdf-folder: {pdfs}\nout-folder: {tmp_path / 'out'}\n"
+    config.write_text(f"# my settings\ninput-folder: {tmp_path / 'in'}\nout-folder: {tmp_path / 'out'}\n"
                       f"work-folder: {tmp_path / 'work'}\nmin-category-courses: 3\n"
-                      f"letters-folder: {tmp_path / 'letters'}\n"
                       "category-definitions:\n  STEM: Science and maths.\n"
                       "log-folder: /nowhere  # keep me\n")
     return built, config
@@ -46,46 +45,68 @@ def client(folders):
 
 
 def courses_for(client, name, category="STEM", builder="llm"):
-    return client.get("/view/student",
+    return client.get("/transcripts/view/student",
                       query_string={"builder": builder, "category": category, "file": name})
 
 
 # --- pages ----------------------------------------------------------------------
 
-def test_two_tabs_opening_on_upload(client):
-    upload = client.get("/").get_data(as_text=True)
-    view = client.get("/view").get_data(as_text=True)
+def test_root_is_a_welcome_page_linking_every_page(client):
+    body = client.get("/").get_data(as_text=True)
+    assert "Welcome." in body and 'id="upload-form"' not in body
+    for href in ("/transcripts/ftp-upload", "/transcripts/view",
+                 "/letters/ftp-upload", "/letters/view", "/profiles/upload", "/profiles/view",
+                 "/summary", "/view/summary"):
+        assert f'<a href="{href}">' in body
+    assert "/transcripts/category-build" not in body
+    assert 'aria-current="page"' not in body  # no nav item is the welcome page
+
+
+def test_left_bar_groups_pages_by_action(client):
+    body = client.get("/transcripts/view").get_data(as_text=True)
+    nav = body[body.index('<nav class="side"'):body.index("</nav>")]
+    order = [nav.index(x) for x in ('<span class="group">Upload</span>',
+                                    'href="/summary" class="sub">Summary',
+                                    'href="/transcripts/ftp-upload" class="sub">Transcripts',
+                                    'href="/letters/ftp-upload" class="sub">Recommendations',
+                                    'href="/profiles/upload" class="sub">Profiles',
+                                    '<span class="group">View</span>',
+                                    'href="/view/summary" class="sub">Rank',
+                                    'href="/transcripts/view" class="sub active" aria-current="page">Transcripts',
+                                    'href="/letters/view" class="sub">Recommendations',
+                                    'href="/profiles/view" class="sub">Profiles')]
+    assert order == sorted(order)
+    assert "category-build" not in nav
+
+
+def test_transcript_pages_share_the_transcripts_path(client):
+    upload = client.get("/transcripts/ftp-upload").get_data(as_text=True)
+    view = client.get("/transcripts/view").get_data(as_text=True)
     for body in (upload, view):
-        assert '<span class="group">Transcripts</span>' in body and 'href="/view"' in body
-        assert 'href="/"' not in body
-    assert 'class="sub active" aria-current="page">View' in view
+        assert 'href="/transcripts/view"' in body and 'href="/view"' not in body
+        # no "Transcripts and Recommendation Letters" title bar on the pages
+        assert "Transcripts and Recommendation Letters</a>" not in body and "<h1>" not in body
+    assert 'href="/transcripts/ftp-upload" class="sub active" aria-current="page">Transcripts' in upload
+    assert 'action="/transcripts/view"' in view
+    assert client.get("/view").status_code == 404
 
 
 def test_upload_page_has_the_form_and_category_panel(client, tmp_path):
-    body = client.get("/").get_data(as_text=True)
-    assert 'id="upload-form"' in body and str(tmp_path / "work") in body
-    assert 'class="split"' in body
+    body = client.get("/transcripts/ftp-upload").get_data(as_text=True)
+    assert 'id="upload-form"' in body and str(tmp_path / "work" / "transcripts") in body
+    assert str(tmp_path / "in" / "transcripts") in body
+    assert 'class="split"' in body and " hidden>" not in body.split('<div class="split')[1][:400]
+    assert body.index('>Transcripts Upload</h2>') < body.index('>Category Build</h2>')
     assert body.index("upload-form") < body.index('id="category-heading"')
     order = [body.index(x) for x in ('id="category-select"', 'id="category-update"',
                                      'id="category-add"')]
     assert order == sorted(order)
 
 
-def test_transcripts_sub_items_show_one_panel_each(client):
-    both = client.get("/").get_data(as_text=True)
-    assert 'href="/transcripts/ftp-upload"' in both and 'href="/transcripts/category-build"' in both
-    assert 'class="split single"' not in both and "hidden>" not in both.split('<div class="split')[1][:400]
-
-    ftp = client.get("/transcripts/ftp-upload").get_data(as_text=True)
-    assert 'class="sub active" aria-current="page">FTP Upload' in ftp
-    assert 'aria-labelledby="category-heading" hidden' in ftp
-    assert 'aria-labelledby="upload-heading" hidden' not in ftp
-
-    build = client.get("/transcripts/category-build").get_data(as_text=True)
-    assert 'class="sub active" aria-current="page">Category Build' in build
-    assert 'aria-labelledby="upload-heading" hidden' in build
-    assert 'aria-labelledby="category-heading" hidden' not in build
-
+def test_old_transcript_addresses_lead_to_the_upload_page(client):
+    for old in ("/transcripts", "/transcripts/category-build"):
+        r = client.get(old)
+        assert r.status_code == 302 and r.headers["Location"].endswith("/transcripts/ftp-upload")
     assert client.get("/transcripts/other").status_code == 404
 
 
@@ -96,14 +117,15 @@ def test_favicon_is_empty(client):
 def test_a_missing_config_still_serves_pages(tmp_path):
     client = create_app(tmp_path / "absent.yaml").test_client()
     assert client.get("/").status_code == 200
-    assert client.get("/view").status_code == 200
+    assert client.get("/transcripts/ftp-upload").status_code == 200
+    assert client.get("/transcripts/view").status_code == 200
 
 
 # --- view -----------------------------------------------------------------------
 
 def test_view_shows_every_student_with_a_min_courses_filter(client, folders):
     built, _ = folders
-    body = client.get("/view").get_data(as_text=True)  # the active builder is the default
+    body = client.get("/transcripts/view").get_data(as_text=True)  # the active builder is the default
     assert f"{built}/stem_gpa.csv" in body
     assert 'data-file="ann.pdf"' in body and "3.900" in body
     # No ranking server-side: Bob is listed; the filter (default from config) hides him.
@@ -113,28 +135,38 @@ def test_view_shows_every_student_with_a_min_courses_filter(client, folders):
     assert "Held back" not in body
 
 
-def test_view_shows_each_students_recommend_letter_rank(client, tmp_path):
+def test_view_rows_highlight_and_the_student_link_opens_the_dialog(client, folders):
+    body = client.get("/transcripts/view").get_data(as_text=True)
+    rows = body.split("<tbody>")[1].split("</tbody>")[0]
+    # As on Recommendations → View: the name is the link; the row itself is not a button
+    assert '<td><a href="#" class="student-link" data-file="ann.pdf">' in rows
+    assert 'class="student"' not in rows and "tabindex" not in rows
+    assert 'id="row-tip"' not in body
+    assert 'row.classList.add("selected")' in body and 'closest("a.student-link")' in body
+    letters = client.get("/letters/view").get_data(as_text=True)
+    assert 'row.classList.add("selected")' in letters
+
+
+def test_view_has_no_recommend_letter_column(client, tmp_path):
     from letter_builder import rank_letters
 
-    letters = tmp_path / "letters"
-    letters.mkdir()
-    for name in ("ann_letter1.pdf", "ann_letter2.pdf"):
-        (letters / name).write_bytes(b"%PDF")
-    rank_letters.write_ranks(letters / "letter_ranks.csv", [("ann_letter1.txt", "excellent", 0.9),
-                                                            ("ann_letter2.txt", "good", 0.8)])
-    body = client.get("/view").get_data(as_text=True)
-    assert ">Recommend letter</button>" in body
-    ann, bob = body.split('data-file="ann.pdf"')[1], body.split('data-file="bob.pdf"')[1]
-    assert '<td data-sort="4">excellent</td>' in ann.split("</tr>")[0]
-    assert '<td data-sort="">–</td>' in bob.split("</tr>")[0]  # no letters
-
+    letters, ranked = tmp_path / "in" / "letters", tmp_path / "work" / "letters"
+    letters.mkdir(parents=True)
+    ranked.mkdir(parents=True)
+    (letters / "ann_letter1.pdf").write_bytes(b"%PDF")
+    rank_letters.write_ranks(ranked / "letter_ranks.csv", [("ann_letter1.txt", "excellent", 0.9)])
+    body = client.get("/transcripts/view").get_data(as_text=True)
+    table = body[body.index('<table id="ranking">'):body.index("</table>")]
+    assert "Recommend letter" not in table  # (the student dialog still gives it)
+    ann = body.split('data-file="ann.pdf"')[1].split("</tr>")[0]
+    assert ann.count("<td") == 7  # Student, Institution, Program, GPA, All, courses, Total, %
 
 def test_view_picks_the_requested_category(client, folders):
     built, _ = folders
     (built / "law_gpa.csv").write_text(
         GPA_HEADER.replace("STEM", "LAW").replace("stem", "law")
         + "Cy Doe,TEST UNIVERSITY,Law,3.2,3.0,4,8,50.0,cy.pdf\n")
-    body = client.get("/view", query_string={"category": "law"}).get_data(as_text=True)
+    body = client.get("/transcripts/view", query_string={"category": "law"}).get_data(as_text=True)
     assert 'data-file="cy.pdf"' in body and 'data-file="ann.pdf"' not in body
 
 
@@ -142,15 +174,15 @@ def test_view_explains_missing_results_and_unknown_builders(client, folders):
     built, _ = folders
     for path in built.iterdir():
         path.unlink()
-    assert "has no results" in client.get("/view").get_data(as_text=True)
+    assert "has no results" in client.get("/transcripts/view").get_data(as_text=True)
     assert "unknown category builder" in client.get(
-        "/view", query_string={"builder": "nope"}).get_data(as_text=True)
+        "/transcripts/view", query_string={"builder": "nope"}).get_data(as_text=True)
 
 
 def test_view_never_reads_out_folder(client, folders, tmp_path):
     (tmp_path / "out").mkdir()
     (tmp_path / "out" / "law_gpa.csv").write_text(GPA_HEADER.replace("STEM", "LAW"))
-    assert "LAW" not in client.get("/view").get_data(as_text=True)
+    assert "LAW" not in client.get("/transcripts/view").get_data(as_text=True)
 
 
 def test_courses_come_from_the_courses_csv(client, folders):
@@ -164,14 +196,15 @@ def test_courses_come_from_the_courses_csv(client, folders):
 def test_student_detail_lists_the_students_letters_with_post_ranks(client, tmp_path):
     from letter_builder import rank_letters
 
-    letters = tmp_path / "letters"
-    letters.mkdir()
+    letters, ranked = tmp_path / "in" / "letters", tmp_path / "work" / "letters"
+    letters.mkdir(parents=True)
+    ranked.mkdir(parents=True)
     for name in ("ann_letter1.pdf", "ann_letter2.pdf", "bob_letter1.pdf"):
         (letters / name).write_bytes(b"%PDF")
-    rank_letters.write_ranks(letters / "letter_ranks.csv", [("ann_letter1.txt", "excellent", 0.5),
+    rank_letters.write_ranks(ranked / "letter_ranks.csv", [("ann_letter1.txt", "excellent", 0.5),
                                                             ("ann_letter2.txt", "good", 0.9)])
     data = courses_for(client, "ann.pdf").get_json()
-    assert data["letter_rank"] == "very good"  # excellent at 0.5 is post-ranked good
+    assert data["letter_rank"] == 80  # excellent at 0.5 is post-ranked good: all good
     assert data["letters"] == [
         {"file": "ann_letter1.pdf", "rank": "good", "pdf_url": "/letters/pdf?file=ann_letter1.pdf"},
         {"file": "ann_letter2.pdf", "rank": "good", "pdf_url": "/letters/pdf?file=ann_letter2.pdf"}]
@@ -196,10 +229,12 @@ def test_courses_need_the_courses_csv(client, folders):
     assert r.status_code == 404 and "no course list" in r.get_json()["error"]
 
 
-def test_pdf_is_found_in_work_folder_first(client, folders, tmp_path):
-    (tmp_path / "work" / "ann.pdf").write_bytes(b"%PDF uploaded")
-    r = client.get("/view/pdf", query_string={"file": "ann.pdf"})
-    assert r.data == b"%PDF uploaded" and r.mimetype == "application/pdf"
+def test_pdf_is_served_from_the_input_folder_only(client, folders, tmp_path):
+    r = client.get("/transcripts/view/pdf", query_string={"file": "ann.pdf"})
+    assert r.data == b"%PDF-1.4 ann" and r.mimetype == "application/pdf"
+    (tmp_path / "work" / "transcripts").mkdir(parents=True)
+    (tmp_path / "work" / "transcripts" / "cy.pdf").write_bytes(b"%PDF")  # not input
+    assert client.get("/transcripts/view/pdf", query_string={"file": "cy.pdf"}).status_code == 404
 
 
 def test_view_rejects_paths_unknown_students_categories_and_builders(client, folders):
@@ -207,7 +242,7 @@ def test_view_rejects_paths_unknown_students_categories_and_builders(client, fol
         assert courses_for(client, name).status_code == 404
     assert courses_for(client, "ann.pdf", category="LAW").status_code == 404
     assert courses_for(client, "ann.pdf", builder="nope").status_code == 404
-    assert client.get("/view/pdf", query_string={"file": "../config.yaml"}).status_code == 404
+    assert client.get("/transcripts/view/pdf", query_string={"file": "../config.yaml"}).status_code == 404
 
 
 # --- upload ---------------------------------------------------------------------
@@ -234,26 +269,27 @@ def upload(client, files):
                        content_type="multipart/form-data")
 
 
-def test_upload_converts_uploaded_pdfs_into_work_folder(client, fake_convert, tmp_path):
+def test_upload_saves_uploads_as_input_and_converts_them_into_work_folder(client, fake_convert, tmp_path):
     data = upload(client, [("a.pdf", b"%PDF a"), ("odd.pdf", b"%PDF odd"),
                            ("s.pdf", b"%PDF scanned")]).get_json()
     assert data["ok"] and data["source"] == "3 uploaded file(s)" and data["pdf_count"] == 3
     assert data["converted"] == [{"file": "a.pdf", "warnings": []},
                                  {"file": "odd.pdf", "warnings": ["odd label"]}]
     assert data["failures"] == [{"file": "s.pdf", "error": "no text layer"}]
-    work = tmp_path / "work"
-    assert (work / "a.common.json").is_file()
-    assert (work / "a.pdf").read_bytes() == b"%PDF a"  # kept for View
+    work = tmp_path / "work" / "transcripts"
+    assert (work / "a.common.json").is_file() and not (work / "a.pdf").exists()
+    assert (tmp_path / "in" / "transcripts" / "a.pdf").read_bytes() == b"%PDF a"  # kept for View
 
 
 def test_upload_strips_client_paths(client, fake_convert, tmp_path):
     assert upload(client, [("../../evil.pdf", b"%PDF")]).get_json()["ok"]
-    assert fake_convert == ["evil.pdf"] and (tmp_path / "work" / "evil.pdf").is_file()
+    assert fake_convert == ["evil.pdf"] and (tmp_path / "in" / "transcripts" / "evil.pdf").is_file()
 
 
-def test_upload_without_files_converts_pdf_folder(client, fake_convert):
+def test_upload_without_files_converts_the_input_folder(client, fake_convert, tmp_path):
     data = client.post("/upload", data={}, content_type="multipart/form-data").get_json()
-    assert data["ok"] and fake_convert == ["ann.pdf"] and data["source"].endswith("pdfs")
+    assert data["ok"] and fake_convert == ["ann.pdf"] and data["source"] == str(tmp_path / "in" / "transcripts")
+    assert data["work_folder"] == str(tmp_path / "work" / "transcripts")
 
 
 def test_upload_rejects_non_pdfs(client, fake_convert):
@@ -269,7 +305,7 @@ def test_upload_reports_when_nothing_converted(client, fake_convert):
 
 def test_upload_needs_a_work_folder(tmp_path):
     config = tmp_path / "config.yaml"
-    config.write_text("pdf-folder: /x\n")
+    config.write_text("input-folder: /x\n")
     r = create_app(config).test_client().post("/upload", data={})
     assert r.status_code == 400 and "work-folder" in r.get_json()["error"]
 
@@ -334,7 +370,7 @@ def test_save_writes_only_the_definitions_section(client, folders):
     assert r.get_json()["categories"] == {"STEM": "Science and maths.",
                                           "BUSINESS": "Edited: management, finance."}
     text = config.read_text()
-    assert text.startswith("# my settings\npdf-folder:")
+    assert text.startswith("# my settings\ninput-folder:")
     assert "log-folder: /nowhere  # keep me" in text
     assert "BUSINESS: 'Edited: management, finance.'" in text
 
@@ -362,8 +398,8 @@ def test_bad_category_requests_never_reach_the_llm(client, fake_llm, path, form,
 # --- runs -----------------------------------------------------------------------
 
 def test_estimate_counts_distinct_unanswered_courses(client, tmp_path):
-    common_json(tmp_path / "work", "ann", [("MATH 1", "Calc", "A", 3, 4.0), ("ENGL 1", "Essay", "A", 3, 4.0)])
-    common_json(tmp_path / "work", "bob", [("MATH 1", "Calc", "A", 3, 4.0), ("PHYS 1", "Mech", "A", 3, 4.0)])
+    common_json(tmp_path / "work" / "transcripts", "ann", [("MATH 1", "Calc", "A", 3, 4.0), ("ENGL 1", "Essay", "A", 3, 4.0)])
+    common_json(tmp_path / "work" / "transcripts", "bob", [("MATH 1", "Calc", "A", 3, 4.0), ("PHYS 1", "Mech", "A", 3, 4.0)])
     data = client.get("/runs/estimate", query_string={"category": "stem"}).get_json()
     assert data["category"] == "STEM"
     assert (data["students"], data["courses"], data["pending"]) == (2, 3, 3)

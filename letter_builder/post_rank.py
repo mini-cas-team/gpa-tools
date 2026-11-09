@@ -1,4 +1,4 @@
-"""python -m letter_builder.post_rank [--folder DIR] [--config config.yaml]
+"""python -m letter_builder.post_rank [--work DIR] [--config config.yaml]
 
 Adjusts Jev's letter ranks by its confidence, in this order:
 
@@ -52,8 +52,8 @@ def post_rank(path: Path) -> list[dict]:
 
 
 def main(argv=None) -> int:
-    _, _, folder = parse_cli(argparse.ArgumentParser(description=__doc__.splitlines()[0]), argv)
-    rows = post_rank(folder / RANKS_CSV)
+    _, _, _, work = parse_cli(argparse.ArgumentParser(description=__doc__.splitlines()[0]), argv)
+    rows = post_rank(work / RANKS_CSV)
     for row in rows:
         if row["rank"] != row["jev_rank"]:
             print(f"{row['filename']}: {row['jev_rank']} -> {row['rank']} ({row['confidence']:.2f})")

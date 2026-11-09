@@ -41,8 +41,8 @@ def test_load_config_reads_category_builder_llm(tmp_path):
     config = tmp_path / "config.yaml"
     config.write_text("work-folder: ~/w\n", encoding="utf-8")
     cfg = llm_run.load_config(config)
-    assert cfg["in"].is_absolute() and cfg["in"].name == "w"
-    assert cfg["folder"] == cfg["in"] / "llm"
+    assert cfg["in"].is_absolute() and cfg["in"].name == "transcripts" and cfg["in"].parent.name == "w"
+    assert cfg["folder"] == cfg["in"].parent / "llm"
     assert (cfg["model"], cfg["url"]) == ("qwen2.5:3b", "http://localhost:11434")
     config.write_text("work-folder: /w\ncategory-builder:\n  llm:\n    model: big\n"
                       "    ollama-url: http://h:1\n", encoding="utf-8")
@@ -189,7 +189,7 @@ def test_each_model_does_its_own_work(tmp_path, monkeypatch):
     config.write_text(f"work-folder: {tmp_path / 'work'}\nlog-folder: {tmp_path / 'log'}\n"
                       "category-builder:\n  llm:\n    category-build-model: small\n"
                       "    category-definition-model: big\n", encoding="utf-8")
-    common_json(tmp_path / "work", "ann", [("MATH 1", "Calc", "A", 3, 4.0),
+    common_json(tmp_path / "work" / "transcripts", "ann", [("MATH 1", "Calc", "A", 3, 4.0),
                                            ("PHYS 1", "Mechanics", "B", 3, 3.0)])
     llm_run.run(llm_run.load_config(config), "STEM")  # no STEM definition yet: drafts one first
     assert calls == [("big", "define"), ("small", "is_member"), ("small", "is_member")]

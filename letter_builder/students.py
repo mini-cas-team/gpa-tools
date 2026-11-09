@@ -1,7 +1,7 @@
 """One record per student: transcript, recommendation letters and their ranks.
 
-A transcript is <student>.pdf (in pdf-folder) and a letter is
-<student>_letter<N>.pdf (in letters-folder), so the student key is the
+A transcript is <student>.pdf (in <input-folder>/transcripts) and a letter is
+<student>_letter<N>.pdf (in <input-folder>/letters), so the student key is the
 transcript's name without its suffix, and the letter's name without
 ``_letter<N>`` and its suffix.
 """
@@ -16,7 +16,8 @@ from letter_builder import RANKS_CSV
 from letter_builder.post_rank import post_rank
 
 LETTER_SUFFIX = re.compile(r"_letter\d*$", re.IGNORECASE)
-GROUP_RANKS = ["very excellent", "excellent", "very good", "good", "normal"]
+# A student's group rank is a score, best first.
+GROUP_RANKS = {"very excellent": 100, "excellent": 90, "very good": 80, "good": 70, "normal": 60}
 
 
 def student_key(letter_name: str | Path) -> str:
@@ -29,19 +30,14 @@ def letter_ranks(folder: Path) -> dict[str, dict]:
     return {Path(row["filename"]).stem: row for row in post_rank(folder / RANKS_CSV)}
 
 
-def group_rank_order(rank: str | None) -> int | None:
-    """A number to sort group ranks by: very excellent highest; None for no rank."""
-    return len(GROUP_RANKS) - GROUP_RANKS.index(rank) if rank in GROUP_RANKS else None
-
-
-def group_rank(ranks: Iterable[str | None]) -> str | None:
+def group_rank(ranks: Iterable[str | None]) -> int | None:
     """A student's rank from their letters' (post_rank) ranks; unranked letters are ignored.
 
-    very excellent: every letter excellent
-    excellent:      at least one excellent, the rest good
-    very good:      every letter good
-    good:           at least one good (or excellent beside a normal one)
-    normal:         every letter normal
+    100 (very excellent): every letter excellent
+     90 (excellent):      at least one excellent, the rest good
+     80 (very good):      every letter good
+     70 (good):           at least one good (or excellent beside a normal one)
+     60 (normal):         every letter normal
     None when no letter is ranked yet.
     """
     ranks = [r for r in ranks if r]
@@ -49,14 +45,14 @@ def group_rank(ranks: Iterable[str | None]) -> str | None:
         return None
     kinds = set(ranks)
     if kinds == {"excellent"}:
-        return "very excellent"
+        return GROUP_RANKS["very excellent"]
     if kinds == {"excellent", "good"}:
-        return "excellent"
+        return GROUP_RANKS["excellent"]
     if kinds == {"good"}:
-        return "very good"
+        return GROUP_RANKS["very good"]
     if kinds & {"excellent", "good"}:
-        return "good"
-    return "normal"
+        return GROUP_RANKS["good"]
+    return GROUP_RANKS["normal"]
 
 
 def student_info(transcript_names: Iterable[str | Path], letter_names: Iterable[str | Path],
@@ -66,7 +62,7 @@ def student_info(transcript_names: Iterable[str | Path], letter_names: Iterable[
         {"student": "adam_flores", "transcript": "adam_flores.pdf",
          "letters": [{"file": "adam_flores_letter1.pdf", "rank": "good",
                       "jev_rank": "excellent", "confidence": 0.55}, ...],
-         "group_rank": "very good"}
+         "group_rank": 80}
 
     ``ranks`` maps a letter's stem (adam_flores_letter1) to its post_rank row,
     as letter_ranks() reads them; a letter missing from it has None for all three.
@@ -95,6 +91,6 @@ def student_info(transcript_names: Iterable[str | Path], letter_names: Iterable[
     return [records[s] for s in sorted(records)]
 
 
-def folder_info(folder: Path, transcript_names: Iterable[str | Path]) -> list[dict]:
-    """student_info for every letter PDF in ``folder``, ranked from its letter_ranks.csv."""
-    return student_info(transcript_names, sorted(folder.glob("*.pdf")), letter_ranks(folder))
+def folder_info(folder: Path, work: Path, transcript_names: Iterable[str | Path]) -> list[dict]:
+    """student_info for every letter PDF in ``folder``, ranked from <work>/letter_ranks.csv."""
+    return student_info(transcript_names, sorted(folder.glob("*.pdf")), letter_ranks(work))

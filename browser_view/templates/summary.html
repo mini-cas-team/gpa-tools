@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}Upload Summary{% endblock %}
+
+{% block heading %}Upload Summary{% endblock %}
+
+{% block body %}
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+{% if rows %}
+  <table class="summary-counts">
+    <thead><tr><th></th><th class="num">Students</th><th class="num">Available</th><th class="num">Missing</th></tr></thead>
+    <tbody>
+      {% for label, available, missing in counts %}
+      <tr><th scope="row">{{ label }}</th><td class="num">{{ available + missing }}</td><td class="num">{{ available }}</td>
+          <td class="num{% if missing %} fail{% endif %}">{{ missing }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="summary-filter">
+    <label for="summary-filter">Show</label>
+    <select id="summary-filter">
+      <option value="">All students</option>
+      <option value="incomplete">Missing a profile, transcript or letter</option>
+      <option value="complete">Profile, transcript and a letter</option>
+    </select>
+    <span id="shown-count" aria-live="polite"></span>
+  </div>
+  <div class="table-wrap scroll">
+  <table id="summary">
+    <thead>
+      <tr>
+        <th aria-sort="ascending"><button type="button" class="sort">Name</button></th>
+        <th data-type="num"><button type="button" class="sort">Profile</button></th>
+        <th data-type="num"><button type="button" class="sort">Transcript</button></th>
+        <th class="num" data-type="num"><button type="button" class="sort">Recommendations</button></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr data-complete="{{ 'yes' if r.profile and r.transcript and r.recommendations else 'no' }}">
+        <td title="{{ r.key }}">{{ r.name }}</td>
+        {% for have in (r.profile, r.transcript) %}
+        <td data-sort="{{ 1 if have else 0 }}">{% if have %}<span class="pass">✓</span>{% else %}<span class="fail">✗</span>{% endif %}</td>
+        {% endfor %}
+        <td class="num{% if not r.recommendations %} fail{% endif %}" data-sort="{{ r.recommendations }}">{{ r.recommendations }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+{% endif %}
+
+{% include "_sort_table.html" %}
+
+<script>
+(() => {
+  const table = document.getElementById("summary");
+  if (!table) return;
+  sortableTable(table);
+  const body = table.tBodies[0];
+  const select = document.getElementById("summary-filter");
+  const shown = document.getElementById("shown-count");
+  function filter() {
+    const want = select.value;
+    let count = 0;
+    for (const row of body.rows) {
+      const complete = row.dataset.complete === "yes";
+      row.hidden = (want === "complete" && !complete) || (want === "incomplete" && complete);
+      if (!row.hidden) count++;
+    }
+    shown.textContent = `Total: ${count}`;  // the rows the table shows now
+  }
+  select.addEventListener("change", filter);
+  filter();
+})();
+</script>
+{% endblock %}

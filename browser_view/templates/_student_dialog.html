@@ -1,7 +1,12 @@
 {# The student dialog, shared by Transcripts → View and Recommendations → View.
    openStudent(file, {builder, category, title}) opens it for the transcript
    named ``file``: a Transcript tab (PDF and, given a category, its courses) and
-   a Recommendation letters tab (each letter's post_rank rank and its PDF). #}
+   a Recommendation letters tab (each letter's post_rank rank and its PDF) and a
+   Profile tab (<work-folder>/personal/<key>.json, as View → Profiles shows it).
+
+   studentRows(tbody, {builder, category}) wires a View page's table: a click
+   highlights its row, and an a.student-link (data-file, optional data-category)
+   opens the dialog. #}
 <dialog id="student-dialog" aria-labelledby="student-title">
   <div class="dialog-head">
     <div>
@@ -13,6 +18,7 @@
   <div class="dialog-tabs" role="tablist">
     <button type="button" role="tab" id="tab-transcript" aria-controls="panel-transcript" aria-selected="true">Transcript</button>
     <button type="button" role="tab" id="tab-letters" aria-controls="panel-letters" aria-selected="false">Recommendation letters</button>
+    <button type="button" role="tab" id="tab-profile" aria-controls="panel-profile" aria-selected="false">Profile</button>
   </div>
   <div class="dialog-body" id="panel-transcript" role="tabpanel" aria-labelledby="tab-transcript">
     <section class="pdf-pane" id="pdf-pane" aria-label="Original transcript"></section>
@@ -21,6 +27,9 @@
   <div class="dialog-body" id="panel-letters" role="tabpanel" aria-labelledby="tab-letters" hidden>
     <section class="pdf-pane" id="letter-pdf-pane" aria-label="Recommendation letter"></section>
     <section class="courses-pane" id="letters-pane" aria-label="Recommendation letters"></section>
+  </div>
+  <div class="dialog-body single" id="panel-profile" role="tabpanel" aria-labelledby="tab-profile" hidden>
+    <section class="courses-pane" id="profile-pane" aria-label="Profile"></section>
   </div>
 </dialog>
 
@@ -33,9 +42,11 @@ window.openStudent = (() => {
   const coursesPane = document.getElementById("courses-pane");
   const letterPdfPane = document.getElementById("letter-pdf-pane");
   const lettersPane = document.getElementById("letters-pane");
+  const profilePane = document.getElementById("profile-pane");
   const tabs = {
     transcript: [document.getElementById("tab-transcript"), document.getElementById("panel-transcript")],
     letters: [document.getElementById("tab-letters"), document.getElementById("panel-letters")],
+    profile: [document.getElementById("tab-profile"), document.getElementById("panel-profile")],
   };
 
   dialog.querySelector(".close").addEventListener("click", () => dialog.close());
@@ -89,7 +100,7 @@ window.openStudent = (() => {
 
   function renderPdf(record) {
     showPdf(pdfPane, record.file, record.pdf_url, `${record.student} — ${record.file}`,
-      `The original PDF (${record.file}) was not found in work-folder or pdf-folder.`);
+      `The original PDF (${record.file}) was not found in <input-folder>/transcripts.`);
   }
 
   // Letters tab: the selected letter's PDF on the left, every letter and its
@@ -134,6 +145,32 @@ window.openStudent = (() => {
     showFirstLetter = () => select(0);
   }
 
+  // Profile tab: each field and its value, as View → Profiles shows them.
+  function renderProfile(record) {
+    if (!record.profile) {
+      profilePane.replaceChildren(el("p", "No profile for this student.", "panel"));
+      return;
+    }
+    const tbl = el("table", null, "courses profile");
+    const head = tbl.createTHead().insertRow();
+    head.append(el("th", "Field"), el("th", "Value"));
+    const tbody = tbl.createTBody();
+    // Each field explains itself on hover (profile.display.HINTS).
+    const hints = {{ profile_hints|tojson }};
+    for (const [field, value] of record.profile) {
+      const row = tbody.insertRow();
+      const name = el("th", field);
+      if (hints[field]) {
+        name.title = hints[field];
+        name.scope = "row";
+      }
+      row.append(name, el("td", value === null || value === undefined ? "–" : String(value)));
+    }
+    const wrap = el("div", null, "table-wrap scroll");
+    wrap.append(tbl);
+    profilePane.replaceChildren(wrap);
+  }
+
   function renderCourses(record, category) {
     if (!category) {
       coursesPane.replaceChildren(el("p",
@@ -175,6 +212,7 @@ window.openStudent = (() => {
     coursesPane.replaceChildren();
     letterPdfPane.replaceChildren();
     lettersPane.replaceChildren();
+    profilePane.replaceChildren();
     showFirstLetter = null;
     tabs.letters[0].textContent = "Recommendation letters";
     showTab("transcript");
@@ -182,7 +220,7 @@ window.openStudent = (() => {
     try {
       const query = new URLSearchParams({ file });
       if (category) { query.set("builder", builder); query.set("category", category); }
-      const response = await fetch(`/view/student?${query}`);
+      const response = await fetch(`/transcripts/view/student?${query}`);
       const data = await response.json().catch(() => ({ error: `server returned ${response.status}` }));
       if (!response.ok) throw new Error(data.error || `server returned ${response.status}`);
 
@@ -197,10 +235,28 @@ window.openStudent = (() => {
       renderPdf(data);
       renderCourses(data, category);
       renderLetters(data);
+      renderProfile(data);
     } catch (err) {
       pdfPane.replaceChildren();
       coursesPane.replaceChildren(el("div", `Error: ${err.message}`, "error"));
     }
   };
 })();
+</script>
+
+<script>
+window.studentRows = (body, options = {}) => {
+  body.addEventListener("click", (e) => {
+    const row = e.target.closest("tr");
+    if (!row || !body.contains(row)) return;
+    for (const other of body.querySelectorAll("tr.selected")) other.classList.remove("selected");
+    row.classList.add("selected");
+    const link = e.target.closest("a.student-link");
+    if (!link) return;
+    e.preventDefault();
+    // A link's own data-category wins: "" for a student without a transcript.
+    const category = "category" in link.dataset ? link.dataset.category : options.category || "";
+    openStudent(link.dataset.file, { builder: options.builder || "", category, title: link.textContent });
+  });
+};
 </script>

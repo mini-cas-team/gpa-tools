@@ -18,6 +18,7 @@ location, whether to add the TypeSafe jev builder), and runs the scripts below.
 | script | does | needs |
 |---|---|---|
 | `check.py` | Reports OS, RAM, GPU, disk, Python/venv, pdftotext, Google Chrome and Edge, Ollama (binary, server, models), config.yaml (including the definer's mode), and the recommended model. Changes nothing. | any Python 3.8+ |
+| `setup_venv.py` | Builds `.venv` with the best Python found (3.14, else 3.12; else uv fetches 3.14 for this user) and installs `requirements.txt` and pytest. `--dry-run` shows the plan; `--rebuild` replaces a venv of an unsupported Python; `--python X` uses that one. Never installs uv or a Python itself. Exit 2: rebuild needed, 3: no supported Python and no uv. | any Python 3.8+ |
 | `get_tools.py` | Installs poppler (pdftotext) into `.tools/` with micromamba. | any Python 3.8+ |
 | `get_ollama.py` | Installs Ollama for this user and starts it. Does nothing if a server already answers. | the venv's Python |
 | `ollama_check.py` | `probe URL`, `pull URL MODEL`, `ask URL MODEL` (one real yes/no question). | any Python 3.8+ |
@@ -26,13 +27,12 @@ location, whether to add the TypeSafe jev builder), and runs the scripts below.
 
 ## By hand
 
-`$PY` is `.venv312/bin/python`, or `.venv312/Scripts/python.exe` on Windows.
+`$PY` is `.venv/bin/python`, or `.venv/Scripts/python.exe` on Windows.
 
 ```bash
 python3 install/check.py --text
 
-python3.12 -m venv .venv312                         # or: uv venv --python 3.12 .venv312
-$PY -m pip install -r requirements.txt pytest
+python3 install/setup_venv.py                      # .venv with Python 3.14 or 3.12, and the packages
 
 python3 install/get_tools.py                        # only if check.py found no pdftotext
 $PY install/configure.py --tool-folder <folder it printed last>
@@ -49,8 +49,8 @@ $PY install/configure.py --model qwen2.5:3b --ollama-url http://localhost:11434
 # optional: the jev builder. Create a key in https://console.typesafe.ai (API Keys),
 # put `export GPA_TOOLS_KEY="<key>"` in ~/.bashrc (Windows: setx), open a new shell.
 python3 install/jev_check.py probe
-python3 install/jev_check.py ask jev-1.13.0
-$PY install/configure.py --jev-model jev-1.13.0 --active-builder jev
+python3 install/jev_check.py ask jev-1.14.0
+$PY install/configure.py --jev-model jev-1.14.0 --active-builder jev
 
 $PY -m browser_view                                 # http://127.0.0.1:5001
 ```
@@ -87,7 +87,7 @@ on a machine without a desktop, use `configure.py --definer-mode prod`.
 
 | what | where |
 |---|---|
-| venv | `.venv312/` in the project |
+| venv | `.venv/` in the project |
 | definer's Chrome profiles | `<work-folder>/browser-profiles/` (`profile-folder:` under `category-definer:` to move them) |
 | poppler | `.tools/` in the project (git-ignored), listed under `tool-folders:` in config.yaml |
 | Ollama | Linux: `~/.local/ollama`, a systemd user service. macOS: `~/Applications/Ollama.app`. Windows: `%LOCALAPPDATA%\Programs\Ollama` |

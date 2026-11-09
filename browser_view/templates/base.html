@@ -23,6 +23,7 @@
   h2 { font-size: 1.1rem; margin: 2rem 0 .6rem; }
   h3 { font-size: .95rem; margin: 1.4rem 0 .4rem; }
   a { color: var(--accent); }
+  h1 a.home { color: inherit; text-decoration: none; }
   fieldset { min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 1rem 1.1rem; margin: 0 0 1.1rem; }
   legend { padding: 0 .4rem; font-weight: 600; font-size: .9rem; }
   label { display: block; margin: .55rem 0 .2rem; font-size: .88rem; color: var(--muted); }
@@ -54,6 +55,8 @@
   ul.notes li { margin: .2rem 0; font-size: .86rem; }
   .warn { color: var(--warn); }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+  /* Without a title bar, the page keeps the same space above it. */
+  .top-space { height: 2rem; }
   /* Title and tabs stay put while the page scrolls under them. */
   header.top {
     position: sticky; top: 0; z-index: 10; background: var(--bg);
@@ -102,13 +105,17 @@
   th[aria-sort=ascending] button.sort::after { content: "▲"; opacity: 1; }
   th[aria-sort=descending] button.sort::after { content: "▼"; opacity: 1; }
   th[aria-sort] { color: var(--fg); }
+  /* A group header's fold toggle, drawn like the sort arrows: ▲ unfolded, ▼ folded */
+  th button.fold { all: unset; cursor: pointer; display: inline-flex; gap: .3rem; align-items: center; }
+  th button.fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  th button.fold::after { content: "▲"; font-size: .8em; }
+  th button.fold[aria-expanded=false]::after { content: "▼"; }
+  /* a two-row sticky header: the second row sticks under the first */
+  .scroll thead tr + tr th { top: var(--head-row-1, 0); }
   tr.student { cursor: pointer; }
-  /* Follows the pointer over the table body; shown at once, unlike a title. */
-  .row-tip {
-    position: fixed; z-index: 20; pointer-events: none; padding: .3rem .55rem;
-    border-radius: 5px; background: var(--fg); color: var(--bg); font-size: .8rem;
-    white-space: nowrap; box-shadow: 0 2px 8px rgb(0 0 0 / .2);
-  }
+  /* The View pages: a clicked row stays highlighted; the student link opens the dialog. */
+  tbody tr.selected, tbody tr.selected:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  tbody tr.selected td:first-child { box-shadow: inset 3px 0 var(--accent); }
   tr.student:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   dialog {
     width: calc(100vw - 2rem); max-width: 110rem; height: calc(100vh - 2rem); max-height: none;
@@ -131,6 +138,9 @@
     flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
   }
   .dialog-body[hidden] { display: none; }
+  .dialog-body.single { grid-template-columns: minmax(0, 1fr); }
+  table.profile { max-width: 48rem; }
+  table.profile tbody th { color: var(--muted); font-weight: 600; width: 14rem; }
   /* The student dialog's Transcript / Recommendation letters tabs. */
   .dialog-tabs { display: flex; gap: .25rem; padding: 0 1.2rem; border-bottom: 1px solid var(--line); }
   .dialog-tabs button {
@@ -156,15 +166,70 @@
   }
   /* Upload tab: upload form on the left, categories on the right. */
   .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
-  .split.single { grid-template-columns: minmax(0, 1fr); }
   .split > section > h2:first-child { margin-top: 0; }
-  .split h2 a { color: inherit; text-decoration: none; }
-  .split h2 a:hover { color: var(--accent); }
   /* Each panel scrolls on its own; --split-top is measured in upload.html. */
   .split > section {
     height: calc(100vh - var(--split-top, 10rem) - 2rem); overflow-y: auto;
     overscroll-behavior: contain; padding-right: .4rem;
   }
+  /* A page that uses the whole window width, not main's 68rem column. */
+  main.wide { max-width: none; }
+  /* Student Rank: Config on the right as narrow as its table, View takes the rest. */
+  .rank-panels { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1.5rem; align-items: start; }
+  .rank-panels > section > h2:first-child { margin-top: 0; }
+  /* The number of rows, beside a panel heading. */
+  h2 .heading-count { margin-left: .5rem; color: var(--muted); font-size: .85rem; font-weight: 500; }
+  /* Student Rank's View heading, then the All / Valid choice and the row count. */
+  .rank-view-head { display: flex; align-items: center; gap: .8rem; margin: 0 0 .6rem; }
+  .rank-view-head h2 { margin: 0; }
+  .rank-view-head select { width: auto; padding: .3rem .5rem; }
+  .rank-view-head .heading-count { margin-left: 0; }
+  .rank-panels > section + section { border-left: 1px solid var(--line); padding-left: 1.2rem; }
+  @media (max-width: 900px) {
+    .rank-panels { grid-template-columns: 1fr; }
+    .rank-panels > section + section { border-left: 0; padding-left: 0; border-top: 1px solid var(--line); padding-top: 1rem; }
+  }
+  table.rank-config td { white-space: nowrap; }
+  #rank-summary th.group { text-align: center; border-bottom: 1px solid var(--line); }
+  /* A button that looks like a link (Student Rank's Config objects). */
+  button.link {
+    all: unset; cursor: pointer; color: var(--accent); text-decoration: underline;
+  }
+  button.link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* A small form dialog (Student Rank's Transcript), not the full-window student one. */
+  dialog.small { width: min(28rem, calc(100vw - 2rem)); height: auto; }
+  /* a column name with hover text (M.state: M = major residence) */
+  th[title] > button.sort, th[title][scope="row"] { text-decoration: underline dotted; text-underline-offset: .2em; cursor: help; }
+  dialog.medium { width: min(46rem, calc(100vw - 2rem)); height: auto; }
+  .prof-fields-wrap { max-height: 60vh; margin-top: .6rem; }
+  table.prof-fields td, table.prof-fields th { vertical-align: top; }
+  table.prof-fields th[scope="row"] { white-space: nowrap; font-weight: 500; }
+  table.prof-fields input[type="checkbox"] { width: auto; margin: 0; }
+  table.prof-fields .rank-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: .2rem .75rem; }
+  table.prof-fields .rank-filter-row input[type="number"] { width: 5.5rem; }
+  table.prof-fields .rank-filter-row input[type="date"] { width: auto; }
+  table.prof-fields label { display: inline-flex; align-items: center; gap: .3rem; margin: 0; color: var(--fg); }
+  table.prof-fields textarea { width: 100%; min-width: 14rem; resize: vertical; font: inherit; }
+  table.prof-fields label .hint { margin: 0; }
+  /* a field that is not shown does not filter: its filter looks off */
+  table.prof-fields td.filter-off { opacity: .45; }
+  table.prof-fields td.filter-off :disabled { background: var(--panel); cursor: not-allowed; }
+  .dialog-form { padding: .4rem 1.2rem 1.2rem; }
+  fieldset.rank-by { margin: .9rem 0 0; padding: .5rem .9rem .7rem; }
+  fieldset.rank-by label { display: flex; align-items: center; gap: .45rem; margin: .3rem 0; color: var(--fg); }
+  fieldset.rank-by input { width: auto; margin: 0; }
+  /* Student Rank's Transcript filter: a source, then its from / to */
+  fieldset.rank-filter .rank-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0 .75rem; }
+  fieldset.rank-filter .rank-filter-row > span { min-width: 5.5rem; }
+  fieldset.rank-filter .rank-filter-row input { width: 5.5rem; }
+  /* Summary page: the total and the available/missing counts above the table. */
+  table.summary-counts { width: auto; margin: 0 0 1.2rem; }
+  table.summary-counts th[scope=row] { color: var(--fg); padding-right: 2rem; }
+  table.summary-counts td { min-width: 6rem; }
+  .summary-filter { display: flex; align-items: center; gap: .6rem; margin: 0 0 .8rem; }
+  .summary-filter label { margin: 0; color: var(--fg); font-weight: 600; }
+  .summary-filter select { width: auto; }
+  .summary-filter #shown-count { color: var(--muted); font-size: .88rem; }
   .category-bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
   .category-bar select { flex: 1 1 4rem; width: auto; min-width: 0; }
   .category-bar select.builder { flex: 0 0 auto; }
@@ -203,18 +268,28 @@
     {%- else %}<a href="{{ href }}" class="sub">{{ label }}</a>{% endif %}
   {%- endmacro %}
   <nav class="side" aria-label="Pages">
-    <span class="group">Transcripts</span>
-    {{ navlink("/transcripts/ftp-upload", "ftp-upload", "FTP Upload") }}
-    {{ navlink("/transcripts/category-build", "category-build", "Category Build") }}
-    {{ navlink("/view", "view", "View") }}
-    <span class="group">Recommendations</span>
-    {{ navlink("/letters/ftp-upload", "letters-upload", "FTP Upload") }}
-    {{ navlink("/letters/view", "letters-view", "View") }}
+    <span class="group">Upload</span>
+    {{ navlink("/summary", "summary", "Summary") }}
+    {{ navlink("/transcripts/ftp-upload", "ftp-upload", "Transcripts") }}
+    {{ navlink("/letters/ftp-upload", "letters-upload", "Recommendations") }}
+    {{ navlink("/profiles/upload", "profiles-upload", "Profiles") }}
+    <span class="group">View</span>
+    {{ navlink("/view/summary", "view-summary", "Rank") }}
+    {{ navlink("/transcripts/view", "view", "Transcripts") }}
+    {{ navlink("/letters/view", "letters-view", "Recommendations") }}
+    {{ navlink("/profiles/view", "profiles-view", "Profiles") }}
   </nav>
-  <main>
+  <main class="{% block main_class %}{% endblock %}">
+    {% if false %}{% block heading %}{% endblock %}{% endif %}
+    {# A page sets a heading (Upload Summary, Student Rank) to get a title bar. #}
+    {% set heading = self.heading()|trim %}
+    {% if heading %}
     <header class="top">
-      <h1>Transcripts and Recommendation Letters</h1>
+      <h1><a href="/" class="home">{{ heading }}</a></h1>
     </header>
+    {% else %}
+    <div class="top-space"></div>
+    {% endif %}
     {% block body %}{% endblock %}
   </main>
 </div>

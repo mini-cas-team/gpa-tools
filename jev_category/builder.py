@@ -1,6 +1,6 @@
 """The jev category builder: TypeSafe's Jev model decides course membership.
 
-Reads the per-student ``*.common.json`` in work-folder, asks Jev for each
+Reads the per-student ``*.common.json`` in <work-folder>/transcripts/, asks Jev for each
 distinct course how likely it is to belong to the category (scores are
 cached), and writes the builder CSVs into <work-folder>/jev/.  A course is in
 the category when its score is above the threshold.  Settings come from
@@ -9,7 +9,7 @@ api-key-env, never in config.yaml:
 
     category-builder:
       jev:
-        model: jev-1.13.0
+        model: jev-1.14.0
         api-url: https://api.typesafe.ai/v1/systemone
         api-key-env: GPA_TOOLS_KEY
         threshold: 0.5
@@ -37,7 +37,7 @@ from .store import ScoreCache
 NAME = "jev"
 log = logging.getLogger("jev_category")
 DEFAULTS = {
-    "model": "jev-1.13.0",
+    "model": "jev-1.14.0",
     "api-url": "https://api.typesafe.ai/v1/systemone",
     "api-key-env": "GPA_TOOLS_KEY",
     "threshold": 0.5,
@@ -54,7 +54,7 @@ def load_config(path: Path) -> dict:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     jev_cfg = {**DEFAULTS, **category_builder.settings(raw, NAME)}
     return {
-        "in": category_builder.work_folder(raw),
+        "in": category_builder.transcripts_folder(raw),
         "folder": category_builder.folder(raw, NAME),
         "log": Path(raw.get("log-folder") or "log").expanduser(),
         "model": jev_cfg["model"],

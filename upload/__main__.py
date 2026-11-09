@@ -2,9 +2,9 @@
 
     python3 -m upload [--config config.yaml]
 
-For each ``*.pdf`` in config.yaml's ``pdf-folder``:
-  1. ``pdftotext -layout``       -> <work-folder>/<name>.txt
-  2. common/txt2common.convert  -> <work-folder>/<name>.common.json
+For each ``*.pdf`` in <input-folder>/transcripts/ (config.yaml):
+  1. ``pdftotext -layout``       -> <work-folder>/transcripts/<name>.txt
+  2. common/txt2common.convert  -> <work-folder>/transcripts/<name>.common.json
   3. common/add_gpa.add_gpa     -> same file, with gpa and gpa_4 per course
 The run is logged to <log-folder>/upload.log.
 """
@@ -17,6 +17,8 @@ import sys
 from pathlib import Path
 
 import yaml
+
+import folders
 
 from .convert import add_tool_folders, pdf_to_common_json
 
@@ -42,8 +44,11 @@ def main(argv=None) -> int:
 
     cfg = yaml.safe_load(args.config.read_text(encoding="utf-8")) or {}
     add_tool_folders(cfg.get("tool-folders"))
-    pdf_folder = Path(cfg["pdf-folder"]).expanduser()
-    work = Path(cfg["work-folder"]).expanduser()
+    try:
+        pdf_folder = folders.input_folder(cfg, "transcripts")
+        work = folders.work_folder(cfg, "transcripts")
+    except KeyError as exc:
+        raise SystemExit(str(exc).strip("'\""))
     log_path = setup_logging(Path(cfg.get("log-folder") or "log").expanduser())
     work.mkdir(parents=True, exist_ok=True)
 

@@ -1,21 +1,23 @@
 # gpa-tools configuration
 #
-# pdf-folder : directory of student transcript PDFs to convert
+# Every component has a folder of raw input, <input-folder>/<component>/, and a
+# folder of what the tools make from it, <work-folder>/<component>/ (folders.py):
+#   transcripts  <name>.pdf             -> <name>.txt, <name>.common.json
+#   letters      <key>_letter<N>.pdf    -> <key>_letter<N>.txt, letter_ranks.csv
+#   personal     <name>.profile         -> <name>.json
 
-pdf-folder: /home/personal/Templates/transcripts
-
-work-folder: /home/personal/Templates/work # .txt/.common.json; builders keep their files in <work-folder>/<builder>/
+components: [transcripts, letters, personal]
+input-folder: /home/personal/Templates # raw input, never written by a run
+work-folder: /home/personal/Templates/work # made from the input; builders keep their files in <work-folder>/<builder>/
 out-folder: /home/personal/Templates/out # published <cat>_gpa.csv, for other applications
 log-folder: /home/personal/Templates/log
-letters-folder: /home/personal/Templates/letters # recommendation letter PDFs, their .txt and letter_ranks.csv
-
 # --- optional settings (defaults shown) -------------------------------------
 min-category-courses: 4 # View tab: hide students with fewer category courses
 run_mode: dev # dev: the student dialog's letters tab also shows Jev's own rank and confidence; anything else hides them
 
 # --- category builders --------------------------------------------------------
 # python -m category_builder --category STEM [--builder llm] [--publish]
-# Each reads the *.common.json in work-folder and writes <cat>_gpa.csv and
+# Each reads the *.common.json in <work-folder>/transcripts and writes <cat>_gpa.csv and
 # <cat>_courses.csv into <work-folder>/<builder>/. python -m out_builder copies
 # <cat>_gpa.csv to out-folder (the Upload tab does that after each run).
 active-category-builder: jev # the default in the Upload and View tabs
@@ -25,7 +27,7 @@ category-builder:
     category-definition-model: qwen2.5:7b # category-definer's ollama step; one call per category, so a bigger model is affordable
     ollama-url: http://localhost:11434 # any model in `ollama list` there
   jev: # TypeSafe's Jev scores each course 0-1; logs to <log-folder>/jev_category.log
-    model: jev-1.13.0 # a version pins it; `jev-latest` follows new releases
+    model: jev-1.14.0 # a version pins it; `jev-latest` follows new releases
     api-url: https://api.typesafe.ai/v1/systemone
     api-key-env: GPA_TOOLS_KEY # name of the env var holding the key; never put the key here
     threshold: 0.5 # a course is in the category when Jev's score is above this
@@ -49,6 +51,12 @@ category-definer:
 # Changing a definition clears the llm builder's cached answers for it.
 # Delete an entry to have category-definer draft a new one.
 category-definitions:
+  LAW: LAW includes the academic study of legal systems, legislation, constitutional law,
+    criminal law, civil law, contract law, property law, international law, jurisprudence,
+    legal institutions, legal procedures, and the application and interpretation of laws.
+    Borderline subjects NOT included are political science, public administration, criminology,
+    sociology, ethics, philosophy, business management, and economics, unless their primary
+    focus is the study of law itself.
   MEDICAL: The MEDICAL category includes courses focused on health sciences, including anatomy,
     physiology, microbiology, pharmacology, and medical genetics. It also encompasses allied
     health fields such as nursing, physical therapy, and occupational therapy. Subjects like

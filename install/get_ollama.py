@@ -1,7 +1,7 @@
 """Install Ollama into the current user's account (no admin) and start it.
 
-    .venv312/bin/python install/get_ollama.py --dry-run
-    .venv312/bin/python install/get_ollama.py            # --rocm adds AMD GPU support (Linux)
+    .venv/bin/python install/get_ollama.py --dry-run
+    .venv/bin/python install/get_ollama.py            # --rocm adds AMD GPU support (Linux)
 
 Linux    the release archive (ollama-linux-<arch>.tar.zst) unpacked into
          ~/.local/ollama, linked from ~/.local/bin/ollama, and started as a
@@ -80,8 +80,8 @@ def unpack_zst(archive: Path, dest: Path) -> None:
         try:
             import zstandard
         except ImportError:
-            raise SystemExit("no zstd support: run `.venv312/bin/pip install zstandard` "
-                             "and use .venv312/bin/python for this script") from None
+            raise SystemExit("no zstd support: run `.venv/bin/pip install zstandard` "
+                             "and use .venv/bin/python for this script") from None
         opener = lambda p: zstandard.ZstdDecompressor().stream_reader(open(p, "rb"))  # noqa: E731
     with opener(archive) as raw, tarfile.open(fileobj=raw, mode="r|") as tar:
         tar.extractall(dest, filter="data")  # no paths outside dest

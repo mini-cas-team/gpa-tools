@@ -1,0 +1,401 @@
+{% extends "base.html" %}
+
+{% block title %}Student Rank{% endblock %}
+
+{% block heading %}Student Rank{% endblock %}
+
+{% block main_class %}wide{% endblock %}
+
+{% block body %}
+{# Two panels, sized by the window: Config on the right is as narrow as its table
+   (a column and its filters; clicking a column opens its dialog), and View on the
+   left takes the rest (one row per name; one column per summary.ABS object,
+   showing its rank() order). #}
+<div class="rank-panels">
+<section id="rank-panel-view" aria-labelledby="rank-view-heading">
+<div class="rank-view-head">
+  <h2 id="rank-view-heading">View</h2>
+  {% if names %}
+  {# All: every row; Valid: only the rows with a value in every column. #}
+  <select id="rank-show" aria-label="Rows to show">
+    <option value="all" selected>All</option>
+    <option value="valid">Valid</option>
+  </select>
+  <span class="heading-count" id="rank-count" aria-live="polite">{{ names|length }} {{ "row" if names|length == 1 else "rows" }}</span>
+  {% endif %}
+</div>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+{% if names %}
+  <div class="table-wrap scroll">
+  <table id="rank-summary">
+    {# An object with sub-columns (Transcript) heads them with its title over a
+       second header row; a single column spans both rows. Each sortable header
+       carries data-col, its cell index in the body rows. The group's ▲/▼ button
+       folds its sub-columns (class "sub-col") into one ("fold-col", hidden
+       until folded) showing them as "3.50/3.20/40.00". The folded column has no
+       sort (no data-col; data-fold is its cell index): the rows keep their order. #}
+    {% set two_rows = groups|selectattr("title")|list %}
+    {% macro fmt(v) %}{{ '–' if v is none else ('%.2f'|format(v) if v is float else v) }}{% endmacro %}
+    {% macro head(i, c, rows, cls="") %}<th{% if rows > 1 %} rowspan="{{ rows }}"{% endif %}{% if c.numeric or cls %} class="{{ (['num'] if c.numeric else [])|join }}{{ ' ' if c.numeric and cls }}{{ cls }}"{% endif %}{% if c.numeric %} data-type="num"{% endif %} data-col="{{ i }}"{% if c.hint %} title="{{ c.hint }}"{% endif %}><button type="button" class="sort">{{ c.title }}</button></th>{% endmacro %}
+    <thead>
+      <tr>
+        <th{% if two_rows %} rowspan="2"{% endif %} data-col="0" title="{{ profile_hints.name }}"><button type="button" class="sort">Name</button></th>
+        {% for g in groups %}{% if g.title %}<th colspan="{{ g.cols|length }}" class="group" scope="colgroup" data-group="{{ g.title }}" data-span="{{ g.cols|length }}"><button type="button" class="fold" aria-expanded="true" title="{{ g.description ~ '. ' if g.description }}Click to fold or unfold the {{ g.title }} columns">{{ g.title }}</button></th>{% else %}{{ head(g.cols[0][0], g.cols[0][1], 2 if two_rows else 1) }}{% endif %}{% endfor %}
+      </tr>
+      {% if two_rows %}
+      <tr>
+        {% for g in groups if g.title %}{% for i, c in g.cols %}{{ head(i, c, 1, "sub-col") }}{% endfor %}<th class="{{ 'num ' if g.cols|map(attribute='1')|selectattr('numeric')|list|length == g.cols|length }}fold-col" data-fold="{{ g.fold_index }}" data-group="{{ g.title }}"{% if g.description %} title="{{ g.description }} ({{ g.folded }})"{% endif %} hidden>{{ g.folded }}</th>{% endfor %}
+      </tr>
+      {% endif %}
+    </thead>
+    <tbody>
+      {% for name in names %}
+      <tr data-valid="{{ 'yes' if name in valid else 'no' }}">
+        <td><a href="#" class="student-link" data-file="{{ keys[name] }}.pdf">{{ name }}</a></td>
+        {% for g in groups %}
+        {% for i, c in g.cols %}{% set v = c.orders.get(name) %}
+        {# a name an object has no order for is blank: the lowest value when sorting #}
+        <td{% if c.numeric or g.title %} class="{{ ((['num'] if c.numeric else []) + (['sub-col'] if g.title else []))|join(' ') }}"{% endif %}{% if c.numeric %} data-sort="{{ v if v is not none else '' }}"{% endif %}>{{ fmt(v) }}</td>
+        {% endfor %}
+        {% if g.title %}
+        <td class="{{ 'num ' if g.cols|map(attribute='1')|selectattr('numeric')|list|length == g.cols|length }}fold-col" hidden>{% for i, c in g.cols %}{% if not loop.first %}/{% endif %}{{ fmt(c.orders.get(name)) }}{% endfor %}</td>
+        {% endif %}
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+{% endif %}
+
+</section>
+
+<section id="rank-panel-config" aria-labelledby="rank-config-heading">
+<h2 id="rank-config-heading">Config</h2>
+{# One row per ranked object; click the object to change its settings. #}
+<table class="rank-config">
+  <thead><tr><th>Column</th><th>Filter</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><button type="button" class="link" id="transcript-action" aria-haspopup="dialog" title="{{ descriptions["Transcript"] }}">Transcript</button></td>
+      {# one line per ranged source: "ALL GPA ≥ 3.00" #}
+      <td>{% if selected and ranges %}{% for source, (low, high) in ranges.items() %}{% if not loop.first %}<br>{% endif %}{{ source_label(source, selected) }} {{ range_label(source, low, high) }}{% endfor %}{% else %}–{% endif %}</td>
+    </tr>
+    <tr>
+      <td><button type="button" class="link" id="recommendation-action" aria-haspopup="dialog" title="{{ descriptions["Recommend Letter"] }}">Recommend Letter</button></td>
+      {# one line per ranged source: "Score ≥ 80" #}
+      <td>{% if rec_ranges %}{% for source, (low, high) in rec_ranges.items() %}{% if not loop.first %}<br>{% endif %}{{ rec_sources[source] }} {{ rec_range_label(low, high) }}{% endfor %}{% else %}–{% endif %}</td>
+    </tr>
+    <tr>
+      <td><button type="button" class="link" id="profile-action" aria-haspopup="dialog" title="{{ descriptions["Profile"] }}">Profile</button></td>
+      {# one line per filtered field: "age 20–30", "sex: F, M" #}
+      <td>{% if prof_labels %}{{ prof_labels|join("<br>"|safe) }}{% else %}–{% endif %}</td>
+    </tr>
+  </tbody>
+</table>
+</section>
+</div>
+
+<dialog id="transcript-dialog" class="small" aria-labelledby="transcript-dialog-title">
+  <form method="get" action="/view/summary" id="transcript-form">
+    {% for source, (low, high) in rec_ranges.items() %}{% set prefix = rec_filters[source][0] %}
+    {% if low is not none %}<input type="hidden" name="{{ prefix }}_min" value="{{ low }}">{% endif %}
+    {% if high is not none %}<input type="hidden" name="{{ prefix }}_max" value="{{ high }}">{% endif %}
+    {% endfor %}
+    {% for name, value in prof_params %}<input type="hidden" name="{{ name }}" value="{{ value }}">
+    {% endfor %}
+    <div class="dialog-head">
+      <h2 id="transcript-dialog-title">Transcript</h2>
+      <button type="button" class="close" aria-label="Close" data-close>×</button>
+    </div>
+    <div class="dialog-form">
+      <p class="hint" style="margin-top:0">The Transcript column ranks each student by a
+        value from the <code>{{ builder }}</code> builder's <code>&lt;cat&gt;_gpa.csv</code>
+        (<code>active-category-builder</code> in config.yaml).</p>
+      <label for="category">Category</label>
+      <select id="category" name="category" {% if not categories %}disabled{% endif %}>
+        {% for name in categories %}
+          <option value="{{ name }}" {% if name == selected %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+      {% if not categories %}<p class="hint">This builder has no results yet.</p>{% endif %}
+      <fieldset class="rank-by">
+        <legend>Rank by</legend>
+        {# Labels follow the chosen category: "STEM GPA", "% STEM". #}
+        {% for source in sources %}
+        <label><input type="radio" name="by" value="{{ source }}" {% if source == by %}checked{% endif %}>
+          <span data-source="{{ source }}" title="{{ source_hint(source, selected or 'category') }}">{{ source_label(source, selected or "category") }}</span></label>
+        {% endfor %}
+      </fieldset>
+      {# Keep only the students whose value of each source is in its range (both
+         ends included); an empty end has no bound. #}
+      <fieldset class="rank-by rank-filter">
+        <legend>Filter</legend>
+        {% for source, (prefix, top) in filters.items() %}{% set low, high = ranges.get(source, (none, none)) %}
+        <div class="rank-filter-row">
+          <span data-source="{{ source }}" title="{{ source_hint(source, selected or 'category') }}">{{ source_label(source, selected or "category") }}</span>
+          <label>from <input type="number" name="{{ prefix }}_min" min="0" max="{{ top|int }}" step="{{ '0.1' if source == 'category-pct' else '0.01' }}"
+            value="{{ low if low is not none else '' }}" aria-label="Lowest {{ source }}"></label>
+          <label>to <input type="number" name="{{ prefix }}_max" min="0" max="{{ top|int }}" step="{{ '0.1' if source == 'category-pct' else '0.01' }}"
+            value="{{ high if high is not none else '' }}" aria-label="Highest {{ source }}"></label>
+        </div>
+        {% endfor %}
+      </fieldset>
+      <p class="hint">GPAs are 0–4, % is 0–100. Leave a row empty to not filter by it.</p>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" data-close>Cancel</button>
+        <button type="submit" {% if not categories %}disabled{% endif %}>Apply</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="recommendation-dialog" class="small" aria-labelledby="recommendation-dialog-title">
+  <form method="get" action="/view/summary" id="recommendation-form">
+    {# Keep the Transcript column's choice. #}
+    {% if selected %}<input type="hidden" name="category" value="{{ selected }}">{% endif %}
+    <input type="hidden" name="by" value="{{ by }}">
+    {% for source, (low, high) in ranges.items() %}{% set prefix = filters[source][0] %}
+    {% if low is not none %}<input type="hidden" name="{{ prefix }}_min" value="{{ low }}">{% endif %}
+    {% if high is not none %}<input type="hidden" name="{{ prefix }}_max" value="{{ high }}">{% endif %}
+    {% endfor %}
+    {% for name, value in prof_params %}<input type="hidden" name="{{ name }}" value="{{ value }}">
+    {% endfor %}
+    <div class="dialog-head">
+      <h2 id="recommendation-dialog-title">Recommend Letter</h2>
+      <button type="button" class="close" aria-label="Close" data-close>×</button>
+    </div>
+    <div class="dialog-form">
+      <p class="hint" style="margin-top:0">The Recommend Letter columns show each student's
+        letters in <code>&lt;input-folder&gt;/letters</code>, as ranked in <code>letter_ranks.csv</code>:
+        <b>Score</b> (100 all excellent, 90 excellent and good, 80 all good, 70 at least
+        one good, 60 all normal) and <b>Count</b>, how many letters they have.</p>
+      {# Keep only the students whose Score and Count are in these ranges (both
+         ends included); an empty end has no bound. #}
+      <fieldset class="rank-by rank-filter">
+        <legend>Filter</legend>
+        {% for source, (prefix, top) in rec_filters.items() %}{% set low, high = rec_ranges.get(source, (none, none)) %}
+        <div class="rank-filter-row">
+          <span title="{{ rec_hints[source] }}">{{ rec_sources[source] }}</span>
+          <label>from <input type="number" name="{{ prefix }}_min" min="0"{% if top %} max="{{ top }}"{% endif %} step="{{ 10 if prefix == 'score' else 1 }}"
+            value="{{ '%g'|format(low) if low is not none else '' }}" aria-label="Lowest {{ rec_sources[source] }}"></label>
+          <label>to <input type="number" name="{{ prefix }}_max" min="0"{% if top %} max="{{ top }}"{% endif %} step="{{ 10 if prefix == 'score' else 1 }}"
+            value="{{ '%g'|format(high) if high is not none else '' }}" aria-label="Highest {{ rec_sources[source] }}"></label>
+        </div>
+        {% endfor %}
+      </fieldset>
+      <p class="hint">Score is 60–100, Count 0 or more. Leave a row empty to not filter by it.</p>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" data-close>Cancel</button>
+        <button type="submit">Apply</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="profile-dialog" class="medium" aria-labelledby="profile-dialog-title">
+  <form method="get" action="/view/summary" id="profile-form">
+    {# Keep the other columns' choices. #}
+    {% if selected %}<input type="hidden" name="category" value="{{ selected }}">{% endif %}
+    <input type="hidden" name="by" value="{{ by }}">
+    {% for source, (low, high) in ranges.items() %}{% set prefix = filters[source][0] %}
+    {% if low is not none %}<input type="hidden" name="{{ prefix }}_min" value="{{ low }}">{% endif %}
+    {% if high is not none %}<input type="hidden" name="{{ prefix }}_max" value="{{ high }}">{% endif %}
+    {% endfor %}
+    {% for source, (low, high) in rec_ranges.items() %}{% set prefix = rec_filters[source][0] %}
+    {% if low is not none %}<input type="hidden" name="{{ prefix }}_min" value="{{ low }}">{% endif %}
+    {% if high is not none %}<input type="hidden" name="{{ prefix }}_max" value="{{ high }}">{% endif %}
+    {% endfor %}
+    <div class="dialog-head">
+      <h2 id="profile-dialog-title">Profile</h2>
+      <button type="button" class="close" aria-label="Close" data-close>×</button>
+    </div>
+    <div class="dialog-form">
+      <p class="hint" style="margin-top:0">The Profile columns show the chosen fields of
+        each student's profile in <code>&lt;work-folder&gt;/personal</code>, as View → Profiles shows them
+        (M = major residence, S = second residence). A filter blanks (–) the field's cell of
+        each student outside it, and never another field's: a range (both ends included) for age, birth_date and
+        years_of_military_service; a list of values, one per line (case is ignored),
+        for every other field.</p>
+      {% macro bound(v) %}{{ '' if v is none else (v if v is string else '%g'|format(v)) }}{% endmacro %}
+      {% if prof_fields %}
+      <div class="table-wrap scroll prof-fields-wrap">
+      <table class="prof-fields">
+        <thead><tr><th>Show</th><th>Field</th><th>Filter</th></tr></thead>
+        <tbody>
+          {% for name, f in prof_fields.items() %}
+          <tr>
+            <td><input type="checkbox" name="prof_show" value="{{ name }}"{% if name in prof.show %} checked{% endif %} aria-label="Show {{ name }}"></td>
+            <th scope="row"{% if f.hint %} title="{{ f.hint }}"{% endif %}>{{ name }}</th>
+            <td>
+              {% if f.kind == "list" %}
+              {# a list[str], one value per line; empty: every student #}
+              <textarea name="prof_in.{{ name }}" rows="2" placeholder="any; one value per line" aria-label="{{ name }} values">{{ (prof["values"].get(name) or prof_default_values.get(name, []))|join("\n") }}</textarea>
+              {% else %}{% set low, high = prof.ranges.get(name, (none, none)) %}
+              <div class="rank-filter-row">
+                <label>from <input type="{{ f.kind }}" name="prof_min.{{ name }}" {% if f.kind == "number" %}step="any" {% endif %}value="{{ bound(low) }}" aria-label="Lowest {{ name }}"></label>
+                <label>to <input type="{{ f.kind }}" name="prof_max.{{ name }}" {% if f.kind == "number" %}step="any" {% endif %}value="{{ bound(high) }}" aria-label="Highest {{ name }}"></label>
+              </div>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      <p class="hint">Show at least one field; the columns follow this order. Only a shown
+        field filters. Leave a filter empty to not filter by it.</p>
+      {% else %}<p class="hint">There are no profiles yet.</p>{% endif %}
+      <div class="dialog-actions">
+        <button type="button" class="secondary" data-close>Cancel</button>
+        <button type="submit" {% if not prof_fields %}disabled{% endif %}>Apply</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+{% include "_student_dialog.html" %}
+{% include "_sort_table.html" %}
+
+<script>
+(() => {
+  // ---- Config → Transcript / Recommend Letter dialogs; Apply reloads -----------
+  const dialog = document.getElementById("transcript-dialog");
+  const categorySelect = document.getElementById("category");
+  // Each Rank by label names the category picked in the dialog.
+  const labels = {{ sources|tojson }};  // by -> label, "{CAT}" for the category
+  const hints = {{ source_hints|tojson }};  // by -> its hover text, "{CAT}" for the category
+  function relabel() {
+    const cat = categorySelect.value || "category";
+    const fill = (text) => text.replaceAll("{CAT}", cat.toUpperCase()).replaceAll("{cat}", cat.toLowerCase());
+    for (const span of dialog.querySelectorAll("[data-source]")) {
+      span.textContent = fill(labels[span.dataset.source]);
+      span.title = fill(hints[span.dataset.source]);
+    }
+  }
+  // An empty end of a Filter range is no bound: leave it out of the query.
+  const BOUNDS = 'input[type="number"], input[type="date"], textarea';
+  const rangeForms = ["transcript-form", "recommendation-form", "profile-form"].map((id) => document.getElementById(id));
+  for (const form of rangeForms) {
+    form.addEventListener("submit", () => {
+      for (const input of form.querySelectorAll(BOUNDS)) input.disabled = input.value === "";
+    });
+  }
+  window.addEventListener("pageshow", () => {
+    for (const form of rangeForms) {
+      for (const input of form.querySelectorAll(BOUNDS)) input.disabled = false;
+    }
+    showBoxes.forEach(syncRow);
+  });
+  // The Profile column needs a field to show.
+  const profileForm = document.getElementById("profile-form");
+  const showBoxes = [...profileForm.querySelectorAll('input[name="prof_show"]')];
+  const needOne = () => {
+    if (showBoxes.length) showBoxes[0].setCustomValidity(
+      showBoxes.some((b) => b.checked) ? "" : "Show at least one field.");
+  };
+  // Only a shown field filters: a row's filter is off (and not sent) while Show is not ticked.
+  const syncRow = (box) => {
+    const cell = box.closest("tr").querySelector("td:last-child");
+    for (const input of cell.querySelectorAll("input, textarea")) input.disabled = !box.checked;
+    cell.classList.toggle("filter-off", !box.checked);
+    cell.title = box.checked ? "" : "Tick Show to filter by this field";
+  };
+  for (const box of showBoxes) {
+    box.addEventListener("change", () => { needOne(); syncRow(box); });
+    syncRow(box);
+  }
+  profileForm.addEventListener("reset", () => setTimeout(() => { needOne(); showBoxes.forEach(syncRow); }));
+  categorySelect.addEventListener("change", relabel);
+
+  // Each Config column opens its dialog, reset to the applied choice.
+  function wire(name, onOpen = () => {}) {
+    const box = document.getElementById(`${name}-dialog`);
+    document.getElementById(`${name}-action`).addEventListener("click", () => {
+      document.getElementById(`${name}-form`).reset();
+      onOpen();
+      box.showModal();
+    });
+    for (const button of box.querySelectorAll("[data-close]")) {
+      button.addEventListener("click", () => box.close());
+    }
+    box.addEventListener("click", (e) => { if (e.target === box) box.close(); });  // backdrop
+  }
+  wire("transcript", relabel);
+  wire("recommendation");
+  wire("profile");
+
+  const table = document.getElementById("rank-summary");
+  if (!table) return;
+  const sortBy = sortableTable(table);
+  // A click highlights its row; the student link opens the dialog, with the
+  // Transcript column's builder and category.
+  studentRows(table.tBodies[0], { builder: {{ builder|tojson }}, category: {{ selected|tojson }} });
+
+  // ---- All / Valid: Valid hides every row missing a value; the count follows -
+  const choice = document.getElementById("rank-show");
+  const count = document.getElementById("rank-count");
+  function show() {
+    let shown = 0;
+    for (const row of table.tBodies[0].rows) {
+      row.hidden = choice.value === "valid" && row.dataset.valid !== "yes";
+      if (!row.hidden) shown++;
+    }
+    count.textContent = `${shown} ${shown === 1 ? "row" : "rows"}`;
+  }
+  // Remember the choice in this browser, so it is kept on leaving and coming back
+  // (and through a Config Apply). Storage can be blocked: the page then opens on All.
+  const KEY = "student-rank-show";
+  try {
+    const saved = localStorage.getItem(KEY);
+    if ([...choice.options].some((o) => o.value === saved)) choice.value = saved;
+  } catch {}
+  choice.addEventListener("change", () => {
+    try { localStorage.setItem(KEY, choice.value); } catch {}
+    show();
+  });
+  show();
+  // ---- ▲/▼ on a group header (Transcript): ▲ shows its sub-columns, ▼ folds
+  // them into one column. The browser remembers each group's choice. ---------
+  const FOLD_KEY = "student-rank-folded";  // JSON list of the folded groups
+  let foldedGroups = [];
+  try { foldedGroups = JSON.parse(localStorage.getItem(FOLD_KEY) || "[]"); } catch {}
+  if (!Array.isArray(foldedGroups)) foldedGroups = [];
+  const headerOf = (col) => table.tHead.querySelector(`th[data-col="${col}"]`);
+  function fold(groupTh, folded) {
+    const group = groupTh.dataset.group;
+    const foldTh = table.tHead.querySelector(`th.fold-col[data-group="${CSS.escape(group)}"]`);
+    const col = Number(foldTh.dataset.fold);
+    const subs = [...Array(Number(groupTh.dataset.span)).keys()].map((k) => col - Number(groupTh.dataset.span) + k);
+    groupTh.colSpan = folded ? 1 : subs.length;
+    groupTh.querySelector("button.fold").setAttribute("aria-expanded", String(!folded));
+    for (const th of [...subs.map(headerOf), foldTh]) th.hidden = th === foldTh ? !folded : folded;
+    for (const row of table.tBodies[0].rows) {
+      for (const k of subs) row.cells[k].hidden = folded;
+      row.cells[col].hidden = !folded;
+    }
+  }
+  // The second header row sticks just under the first.
+  const stickRows = () => table.style.setProperty("--head-row-1", `${table.tHead.rows[0].offsetHeight}px`);
+  if (table.tHead.rows.length > 1) {
+    stickRows();
+    window.addEventListener("resize", stickRows);
+  }
+  for (const groupTh of table.tHead.querySelectorAll("th.group")) {
+    fold(groupTh, foldedGroups.includes(groupTh.dataset.group));
+    groupTh.querySelector("button.fold").addEventListener("click", () => {
+      const folded = groupTh.querySelector("button.fold").getAttribute("aria-expanded") === "true";
+      fold(groupTh, folded);
+      foldedGroups = foldedGroups.filter((g) => g !== groupTh.dataset.group);
+      if (folded) foldedGroups.push(groupTh.dataset.group);
+      try { localStorage.setItem(FOLD_KEY, JSON.stringify(foldedGroups)); } catch {}
+    });
+  }
+
+  // Open sorted by Transcript's Rank by (also when folded: the rows keep that
+  // order), else the first column; highest first.
+  if ({{ columns|length }} > 0) sortBy({{ sort_col }});
+})();
+</script>
+{% endblock %}

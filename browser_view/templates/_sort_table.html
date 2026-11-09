@@ -1,13 +1,23 @@
-{# Click-to-sort tables, shared by Transcripts → View and Recommendations → View.
+{# Click-to-sort tables, shared by the View pages.
    sortableTable(table) wires each header's button.sort and returns sortBy(index).
-   A column with data-type="num" sorts by its cells' data-sort; others by text. #}
+   A column with data-type="num" sorts by its cells' data-sort; others by text.
+   A blank cell (no value, or "–") is the lowest value, so it moves with the
+   direction: last high-to-low, first low-to-high.
+   A table with two header rows numbers its sortable headers with data-col, the
+   body cell index each sorts (indices may skip a cell with no sort, such as a
+   folded column); otherwise they are the first header row's cells, in order.
+   sortBy(index) takes that body cell index. #}
 <script>
 window.sortableTable = (table) => {
-  const headers = [...table.tHead.rows[0].cells];
+  // body cell index -> its header
+  const numbered = [...table.tHead.querySelectorAll("th[data-col]")];
+  const headers = new Map(numbered.length
+    ? numbered.map((th) => [Number(th.dataset.col), th])
+    : [...table.tHead.rows[0].cells].map((th, index) => [index, th]));
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
   function sortBy(index) {
-    const th = headers[index];
+    const th = headers.get(index);
     const numeric = th.dataset.type === "num";
     // First click: numbers high-to-low, text A-Z; then toggle.
     const current = th.getAttribute("aria-sort");
@@ -22,11 +32,13 @@ window.sortableTable = (table) => {
     };
     const body = table.tBodies[0];
     const rows = [...body.rows];
+    // A blank (no value, or "–") is the lowest value: last high-to-low, first low-to-high.
+    const blank = (v) => v === "" || v === "–";
     rows.sort((a, b) => {
       const x = key(a), y = key(b);
-      // Blanks sort last whichever way the column runs.
-      if (x === "" || y === "") return (x === "") - (y === "");
-      const order = numeric ? Number(x) - Number(y) : collator.compare(x, y);
+      const order = blank(x) || blank(y)
+        ? blank(y) - blank(x)  // a blank is below any value; two blanks tie
+        : numeric ? Number(x) - Number(y) : collator.compare(x, y);
       return sign * order || Number(a.dataset.index) - Number(b.dataset.index);
     });
     body.append(...rows);
@@ -35,7 +47,7 @@ window.sortableTable = (table) => {
     th.setAttribute("aria-sort", direction);
   }
 
-  headers.forEach((th, index) => {
+  headers.forEach((th, index) => {  // Map.forEach: (value, key)
     th.querySelector("button.sort").addEventListener("click", () => sortBy(index));
   });
   return sortBy;

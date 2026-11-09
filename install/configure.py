@@ -1,6 +1,6 @@
 """Create or update config.yaml for this machine.
 
-    .venv312/bin/python install/configure.py --data ~/gpa-tools-data \\
+    .venv/bin/python install/configure.py --data ~/gpa-tools-data \\
         --model qwen2.5:3b --ollama-url http://localhost:11434
 
 --model sets both Ollama models in category-builder: llm:,
@@ -34,7 +34,10 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG = PROJECT_ROOT / "config.yaml"
-FOLDERS = {"pdf-folder": "transcripts", "work-folder": "work", "out-folder": "out", "log-folder": "log"}
+FOLDERS = {"input-folder": "", "work-folder": "work", "out-folder": "out", "log-folder": "log"}
+# Each gets one subfolder per component (folders.py COMPONENTS).
+COMPONENT_FOLDERS = ("input-folder", "work-folder")
+COMPONENTS = ("transcripts", "letters", "personal")
 # A new config.yaml starts as this; main() then fills in what it is given.
 TEMPLATE = """\
 # gpa-tools configuration for this machine.
@@ -42,8 +45,14 @@ TEMPLATE = """\
 # Made by install/configure.py (or /install-gpa-tools in Claude Code); edit freely.
 
 # --- folders ------------------------------------------------------------------
-pdf-folder: ~/gpa-tools-data/transcripts # transcript PDFs to read
-work-folder: ~/gpa-tools-data/work # .txt/.common.json; builders keep their files in <work-folder>/<builder>/
+# Every component has a folder of raw input, <input-folder>/<component>/, and a
+# folder of what the tools make from it, <work-folder>/<component>/:
+#   transcripts  <name>.pdf             -> <name>.txt, <name>.common.json
+#   letters      <key>_letter<N>.pdf    -> <key>_letter<N>.txt, letter_ranks.csv
+#   personal     <name>.profile         -> <name>.json
+components: [transcripts, letters, personal]
+input-folder: ~/gpa-tools-data # raw input, never written by a run
+work-folder: ~/gpa-tools-data/work # made from the input; builders keep their files in <work-folder>/<builder>/
 out-folder: ~/gpa-tools-data/out # published <cat>_gpa.csv, for other applications
 log-folder: ~/gpa-tools-data/log # upload.log, llm_category.log, jev_category.log, browser_view.log
 
@@ -57,7 +66,7 @@ min-category-courses: 4 # hide students with fewer category courses
 
 # --- category builders --------------------------------------------------------
 # python -m category_builder --category STEM [--builder llm] [--publish]
-# Each reads the *.common.json in work-folder and writes <cat>_gpa.csv and
+# Each reads the *.common.json in <work-folder>/transcripts and writes <cat>_gpa.csv and
 # <cat>_courses.csv into <work-folder>/<builder>/. python -m out_builder copies
 # <cat>_gpa.csv to out-folder (the Upload tab does that after each run).
 active-category-builder: llm # the default in the Upload and View tabs
@@ -67,7 +76,7 @@ category-builder:
     category-definition-model: qwen2.5:3b # category-definer's ollama step; one call per category, so a bigger model is affordable
     ollama-url: http://localhost:11434 # any model in `ollama list` there
   jev: # TypeSafe's Jev scores each course 0-1 (hosted; needs an API key)
-    model: jev-1.13.0 # a version pins it; `jev-latest` follows new releases
+    model: jev-1.14.0 # a version pins it; `jev-latest` follows new releases
     api-url: https://api.typesafe.ai/v1/systemone
     api-key-env: GPA_TOOLS_KEY # name of the env var holding the key; never put the key here
     threshold: 0.5 # a course is in the category when Jev's score is above this
@@ -166,14 +175,14 @@ def _get(cfg: dict, path) -> object:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--config", type=Path, default=CONFIG)
-    ap.add_argument("--data", help="base folder: sets the four folders to "
-                                   "<data>/transcripts, work, out and log")
+    ap.add_argument("--data", help="base folder: input-folder <data>, and "
+                                   "<data>/work, out and log for the other three")
     for key in FOLDERS:
         ap.add_argument(f"--{key}", help=f"set {key} (overrides --data)")
     ap.add_argument("--model", help="category-build-model and category-definition-model")
     ap.add_argument("--definer-model", help="category-definition-model, if different")
     ap.add_argument("--ollama-url")
-    ap.add_argument("--jev-model", help="the jev builder's TypeSafe model, e.g. jev-1.13.0")
+    ap.add_argument("--jev-model", help="the jev builder's TypeSafe model, e.g. jev-1.14.0")
     ap.add_argument("--jev-key-env", help="name of the env var holding the TypeSafe API key")
     ap.add_argument("--active-builder", choices=("llm", "jev"),
                     help="the builder the Upload and View tabs start with")
@@ -193,7 +202,8 @@ def main(argv=None) -> int:
     for key, sub in FOLDERS.items():
         given = getattr(args, key.replace("-", "_"))
         if given or args.data:
-            wanted[key] = path_value(given or str(Path(args.data).expanduser() / sub))
+            wanted[key] = path_value(given or str(Path(args.data).expanduser() / sub if sub
+                                                  else Path(args.data).expanduser()))
     if args.active_builder:
         wanted["active-category-builder"] = args.active_builder
     for key, value in wanted.items():
@@ -233,7 +243,11 @@ def main(argv=None) -> int:
     if not args.no_mkdir:
         for key in FOLDERS:
             if parsed.get(key):
-                Path(str(parsed[key])).expanduser().mkdir(parents=True, exist_ok=True)
+                base = Path(str(parsed[key])).expanduser()
+                base.mkdir(parents=True, exist_ok=True)
+                if key in COMPONENT_FOLDERS:
+                    for component in parsed.get("components") or COMPONENTS:
+                        (base / str(component)).mkdir(exist_ok=True)
 
     print(f"{'created' if created else 'updated'} {path}")
     for key in FOLDERS:
