@@ -309,10 +309,26 @@ def test_a_browser_leg_enters_a_prompt_of_several_lines_with_shift_enter(monkeyp
 # ---- the page: Config → Ask AI ----
 
 def test_the_page_has_the_ask_box(cfg):
-    body = create_app(cfg["config"]).test_client().get("/view/summary").get_data(as_text=True)
+    body = create_app(cfg["config"]).test_client().get("/view/rank").get_data(as_text=True)
     config = body[body.index('id="rank-panel-config"'):]
     assert '<form class="rank-ask" id="ask-form"' in config and '<button type="submit" id="ask-go">Go</button>' in config
-    assert "fetch(`/view/summary/ask${location.search}`" in body
+    assert "fetch(`/view/rank/ask${location.search}`" in body
+    # the requests sent are kept in the browser; ↑ ↓ move over them
+    assert 'HISTORY_KEY = "student-rank-ask-history"' in body and "remember(question);" in body
+    assert 'e.key !== "ArrowUp" && e.key !== "ArrowDown"' in body
+
+
+def test_the_page_marks_new_or_changed_columns(cfg):
+    body = create_app(cfg["config"]).test_client().get("/view/rank").get_data(as_text=True)
+    assert 'COLUMNS_KEY = "student-rank-columns"' in body and 'th.classList.add("changed")' in body
+    assert "#rank-summary td.changed" in body
+
+
+def test_the_old_rank_routes_are_gone(cfg):
+    client = create_app(cfg["config"]).test_client()
+    assert client.get("/view/summary").status_code == 404
+    assert client.post("/view/summary/ask", json={"question": "q"}).status_code == 404
+    assert client.get("/view/rank").status_code == 200
 
 
 def test_ask_route_starts_from_the_page_filters_and_returns_the_new_url(cfg, monkeypatch):
@@ -321,14 +337,14 @@ def test_ask_route_starts_from_the_page_filters_and_returns_the_new_url(cfg, mon
                         "Maine", ["same state as the school"]))
     monkeypatch.setitem(PROVIDERS, "fake", fake)
     client = create_app(cfg["config"]).test_client()
-    resp = client.post("/view/summary/ask?prof_show=age&prof_min.age=21",
+    resp = client.post("/view/rank/ask?prof_show=age&prof_min.age=21",
                        json={"question": "students from Maine"})
     data = resp.get_json()
     assert resp.status_code == 200 and data["source"] == "fake"
     assert data["unsupported"] == ["same state as the school"] and data["explanation"] == "Maine"
     assert '{"column": "Profile", "field": "age", "op": "range", "min": 21.0}' in fake.prompts[0]
     url = urlsplit(data["url"])
-    assert url.path == "/view/summary"
+    assert url.path == "/view/rank"
     assert parse_qsl(url.query) == [("category", "STEM"), ("by", "category-gpa"), ("prof_show", "age"),
                                     ("prof_show", "M.state"), ("prof_in.M.state", "Maine"),
                                     ("prof_min.age", "21")]
@@ -339,7 +355,7 @@ def test_ask_route_starts_from_the_page_filters_and_returns_the_new_url(cfg, mon
 
 def test_ask_route_errors(cfg, monkeypatch):
     client = create_app(cfg["config"]).test_client()
-    assert client.post("/view/summary/ask", json={"question": " "}).status_code == 400
+    assert client.post("/view/rank/ask", json={"question": " "}).status_code == 400
     monkeypatch.setitem(PROVIDERS, "fake", Script(OSError("down")))
-    resp = client.post("/view/summary/ask", data={"question": "q"})
+    resp = client.post("/view/rank/ask", data={"question": "q"})
     assert resp.status_code == 502 and resp.get_json()["attempts"] == ["fake try 1 (0.0s) failed: OSError: down"]

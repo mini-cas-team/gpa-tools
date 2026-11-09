@@ -341,7 +341,7 @@ def _summary_rows(cfg: dict) -> list[dict]:
     return rows
 
 
-PROFILE_SUFFIX = ".profile"  # Upload → Profiles reads these and saves <name>.json
+PROFILE_SUFFIX = ".json"  # Upload → Profiles reads these from <input-folder>/personal, saves <work-folder>/personal/<name>.json
 
 
 def _student_profile(transcript: str, cfg: dict) -> list[list] | None:
@@ -748,15 +748,15 @@ def create_app(config_path: Path | None = None) -> Flask:
 
     @app.post("/profiles/upload")
     def run_profiles_upload():
-        """Read .profile files, the uploaded ones (saved in <input-folder>/personal
-        too) or, with none chosen, every *.profile already there, and save each as
+        """Read .json profile files, the uploaded ones (saved in <input-folder>/personal
+        too) or, with none chosen, every *.json already there, and save each as
         <work-folder>/personal/<name>.json (replacing one of that name), which
         profile_load reads; then reload every profile into memory.
 
-        Each .profile must hold one JSON object; nothing is written unless every
+        Each input file must hold one JSON object; nothing is written unless every
         file is valid.  A profile without "institution" or "program" gets them
         from the transcript whose student.name is the profile's name (None if
-        none is; profile/enrich.py); the .profile itself is saved as it came."""
+        none is; profile/enrich.py); the input file itself is saved as it came."""
         cfg = _load_config(config_path)
         try:
             folder = profile_load.personal_folder(cfg)
@@ -765,7 +765,7 @@ def create_app(config_path: Path | None = None) -> Flask:
             return jsonify(error=str(exc).strip("'\"")), 400
         uploads = [f for f in request.files.getlist("profiles") if f and f.filename]
         try:
-            sources = []  # (.profile name, its bytes, whether it is a new upload)
+            sources = []  # (input file name, its bytes, whether it is a new upload)
             if uploads:
                 for upload in uploads:
                     name = Path(upload.filename).name  # never trust a client path
@@ -951,7 +951,7 @@ def create_app(config_path: Path | None = None) -> Flask:
         out["objects"] = [o for o in (out["transcript"], out["recommendation"], out["profile"]) if o]
         return out
 
-    @app.get("/view/summary")
+    @app.get("/view/rank")
     def view_summary():
         """One row per student name of every upload type, one column per ranked
         object: Transcript (three sub-columns, from the active builder: ?category=;
@@ -1004,7 +1004,7 @@ def create_app(config_path: Path | None = None) -> Flask:
 
     ask_lock = threading.Lock()  # one AI request at a time: one local model, one browser profile
 
-    @app.post("/view/summary/ask")
+    @app.post("/view/rank/ask")
     def view_summary_ask():
         """Config → Ask AI: the request (form or JSON "question") turned into
         Student Rank filters by rank_ai, starting from the filters in this URL's
@@ -1026,7 +1026,7 @@ def create_app(config_path: Path | None = None) -> Flask:
             return jsonify(error=str(exc), attempts=[a.line() for a in exc.attempts]), 502
         finally:
             ask_lock.release()
-        return jsonify(url=f"/view/summary?{urlencode(result.params)}", **result.to_dict())
+        return jsonify(url=f"/view/rank?{urlencode(result.params)}", **result.to_dict())
 
     @app.get("/favicon.ico")
     def favicon():

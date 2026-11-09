@@ -2,7 +2,7 @@
 
     from rank_ai import ask
     result = ask(cfg, "<the user's request>", objects)   # summary.ABS objects
-    result.params   # Student Rank query params: /view/summary?<urlencode(params)>
+    result.params   # Student Rank query params: /view/rank?<urlencode(params)>
 
 The code never looks at what is asked. It sends the LLM
 

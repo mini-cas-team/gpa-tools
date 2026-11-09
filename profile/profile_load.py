@@ -1,6 +1,6 @@
 """Load every *.json in <work-folder>/personal/ into an in-memory dict.
 
-Upload → Profiles makes them from the <name>.profile files in
+Upload → Profiles makes them from the <name>.json files in
 <input-folder>/personal/ (folders.py).
 
     PROFILES["adam_flores.json"] -> {"name": "Adam Flores", "age": 25, ...}
@@ -29,7 +29,7 @@ ERRORS: dict[str, str] = {}     # file name -> why it was left out
 
 
 def personal_folder(raw: dict) -> Path:
-    """The <name>.profile files: <input-folder>/personal/ (KeyError without input-folder)."""
+    """The input <name>.json files: <input-folder>/personal/ (KeyError without input-folder)."""
     return folders.input_folder(raw, "personal")
 
 

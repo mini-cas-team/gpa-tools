@@ -117,7 +117,7 @@ work folder, which holds only what the tools make from it (`folders.py`):
 |---|---|---|
 | `transcripts` | `<name>.pdf` | `<name>.txt`, `<name>.common.json` |
 | `letters` | `<key>_letter<N>.pdf` | `<key>_letter<N>.txt`, `letter_ranks.csv` |
-| `personal` | `<name>.profile` | `<name>.json` |
+| `personal` | `<name>.json` | `<name>.json` |
 
 Everything in a work folder can be made again from the input, so deleting it
 only costs a rerun. The builders keep their CSVs and caches in
@@ -293,7 +293,7 @@ Upload Summary and Student Rank, whose title leads back to it. A left bar lists
 the pages in two groups.
 **Upload**: *Summary* (`/summary`), *Transcripts* (`/transcripts/ftp-upload`,
 the Upload tab below), *Recommendations* (`/letters/ftp-upload`) and *Profiles*
-(`/profiles/upload`). **View**: *Rank* (`/view/summary`), *Transcripts*
+(`/profiles/upload`). **View**: *Rank* (`/view/rank`), *Transcripts*
 (`/transcripts/view`), *Recommendations* (`/letters/view`) and *Profiles*
 (`/profiles/view`).
 `/transcripts` and the old `/transcripts/category-build` redirect to
@@ -374,15 +374,15 @@ The same steps run from the command line:
 `<work-folder>/personal` into memory: `profile_load.PROFILES` is a dict keyed by file
 name (`adam_flores.json` → its JSON object). `load()` re-reads the folder and
 replaces the dict; a file that is not valid JSON, or not a JSON object, is left
-out and listed in `profile_load.ERRORS`. *Upload → Profiles* reads `.profile` files (each one JSON object): the chosen
+out and listed in `profile_load.ERRORS`. *Upload → Profiles* reads `.json` files (each one JSON object): the chosen
 ones, which are saved in `<input-folder>/personal`, or with none chosen every
-`*.profile` already there. Each is saved as `<work-folder>/personal/<name>.json`, replacing
+`*.json` already there. Each is saved as `<work-folder>/personal/<name>.json`, replacing
 one of that name; nothing is written if any file is not a JSON object. A
-profile without an `institution` or `program` attribute gets it in its
-`.json` (`profile/enrich.py`, `FIELDS`), from the transcript whose
+profile without an `institution` or `program` attribute gets it in the
+saved copy (`profile/enrich.py`, `FIELDS`), from the transcript whose
 `student.name` equals the profile's `name` (exact match): `institution.name`
 and `student.major` (the program, as the builders call it), or `null` when no
-transcript has that name. An attribute the profile has, even `null`, is kept. The `.profile` is not changed. Then it
+transcript has that name. An attribute the profile has, even `null`, is kept. The input file is not changed. (Input files used to be named `.profile`; those are no longer read, so rename them to `.json`.) Then it
 reloads. *View → Profiles* reloads and shows one row per file,
 with nested fields as `parent.field` columns, sortable and searchable. Clicking
 a row highlights it; the **name** links to the student dialog (as on
@@ -415,7 +415,7 @@ recommendations, at least one letter) and how many do not (**Missing**).
 Below it, **Show** filters the student table to those missing something, or
 to complete ones, with the number of rows it shows (**Total**) beside it.
 
-**View → Rank** (`/view/summary`, headed *Student Rank*). The page uses the
+**View → Rank** (`/view/rank`, headed *Student Rank*). The page uses the
 whole window width, in two panels: *Config* on the right is as narrow as its
 table, and *View* on the left takes the rest.
 
@@ -472,14 +472,20 @@ write another `ABS` subclass, add it to `_rank_objects` in `browser_view/app.py`
 `view_summary.html`; for Ask AI to filter it, give it `filter_specs()`,
 `current_filters()` and `params()` (below).
 
+A column that is new, or whose values differ from the last time this browser tab
+showed the page (after Ask AI or a Config Apply), is shown in **orange**; a reload
+of the same page keeps it, and the first view in a tab has nothing to compare with.
+
 **Ask AI**, under the Config table, sets the filters from a request typed in
 plain words. **Go** (or Enter; Shift+Enter is a new line) sends it, with the
-page's current filters, to `POST /view/summary/ask`, and the page then opens
+page's current filters, to `POST /view/rank/ask`, and the page then opens
 with the new filters, shown in Config and the dialogs as usual, so they can be
 checked and changed by hand. Under the box: the model's explanation of what it
 chose, any part of the request the filters cannot express (*Could not be done
 with the filters*), any filter it gave that did not fit and was left out, and
-which provider answered. A request starts from the current filters: "also only
+which provider answered. **↑** on the box's first line and **↓** on its last
+move over the requests sent before (the last 100, kept in this browser). A
+request starts from the current filters: "also only
 women" adds to them, "drop the GPA limit" removes one. A new condition on a
 field that already has a filter replaces it, so "older than 25" after "older
 than 30" widens the age filter, unless the request says to combine them.

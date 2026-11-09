@@ -9,21 +9,21 @@
   <fieldset>
     <legend>Student profiles</legend>
     <label for="profile-files">Upload profiles</label>
-    <input type="file" id="profile-files" name="profiles" accept=".profile" multiple>
-    <p class="hint">One <code>&lt;name&gt;.profile</code> per student, holding one JSON object.
-      Leave empty to take every <code>.profile</code> already in <code>{{ folder }}</code>,
+    <input type="file" id="profile-files" name="profiles" accept=".json" multiple>
+    <p class="hint">One <code>&lt;name&gt;.json</code> per student, holding one JSON object.
+      Leave empty to take every <code>.json</code> already in <code>{{ folder }}</code>,
       <code>&lt;input-folder&gt;/personal</code> in config.yaml.</p>
   </fieldset>
 
   <fieldset>
     <legend>Output</legend>
     <p class="hint" style="margin-top:0">Each becomes <code>&lt;name&gt;.json</code> in
-      <code>{{ work }}</code>, replacing one of that name; uploaded <code>.profile</code>
-      files are saved in <code>{{ folder }}</code>. The <code>.json</code> files are what View → Profiles,
+      <code>{{ work }}</code>, replacing one of that name; uploaded
+      files are saved in <code>{{ folder }}</code>. The files in <code>{{ work }}</code> are what View → Profiles,
       Summary and Rank read. Nothing is written if any file is not a JSON object.
       A profile without an <code>institution</code> or <code>program</code> gets it from
       the transcript whose student name is the profile's <code>name</code>; the
-      <code>.profile</code> itself is not changed.</p>
+      input file itself is not changed.</p>
   </fieldset>
   <button type="submit">Upload</button>
 </form>

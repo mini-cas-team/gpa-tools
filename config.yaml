@@ -4,7 +4,7 @@
 # folder of what the tools make from it, <work-folder>/<component>/ (folders.py):
 #   transcripts  <name>.pdf             -> <name>.txt, <name>.common.json
 #   letters      <key>_letter<N>.pdf    -> <key>_letter<N>.txt, letter_ranks.csv
-#   personal     <name>.profile         -> <name>.json
+#   personal     <name>.json            -> <name>.json
 
 components: [transcripts, letters, personal]
 input-folder: /home/personal/Templates # raw input, never written by a run

@@ -10,7 +10,7 @@ config.yaml:
     component     input (never written by a run)   work (made from the input)
     transcripts   <name>.pdf                       <name>.txt, <name>.common.json
     letters       <key>_letter<N>.pdf              <key>_letter<N>.txt, letter_ranks.csv
-    personal      <name>.profile                   <name>.json
+    personal      <name>.json                      <name>.json
 
 Both folders must be set (KeyError otherwise; there is no default, so nothing
 is ever read or written somewhere the config does not name).  Every file in a

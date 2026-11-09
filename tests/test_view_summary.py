@@ -102,9 +102,9 @@ def test_transcript_ranks_every_uploaded_transcript_by_its_category_gpa(cfg):
 
 def test_view_summary_page(cfg):
     client = create_app(cfg["config"]).test_client()
-    body = client.get("/view/summary", query_string={"category": "stem"}).get_data(as_text=True)
+    body = client.get("/view/rank", query_string={"category": "stem"}).get_data(as_text=True)
     nav = body[body.index('<nav class="side"'):body.index("</nav>")]
-    assert nav.index(">View</span>") < nav.index('href="/view/summary" class="sub active"')
+    assert nav.index(">View</span>") < nav.index('href="/view/rank" class="sub active"')
     assert '<a href="/" class="home">Student Rank</a>' in body and ">Rank</a>" in nav
     # View (only the table) on the left, Config (the Transcript row) on the right
     panels = body[body.index('<div class="rank-panels">'):]
@@ -164,7 +164,7 @@ def test_view_summary_page(cfg):
     assert '<td class="num sub-col" data-sort="20">20</td>' in ranks
     assert '<td class="num sub-col" data-sort="3.5">3.50</td>' in ranks
     # no category asked for: STEM
-    assert ">STEM GPA</button>" in client.get("/view/summary").get_data(as_text=True)
+    assert ">STEM GPA</button>" in client.get("/view/rank").get_data(as_text=True)
 
 
 @pytest.mark.parametrize("by, value, col", [
@@ -182,7 +182,7 @@ def test_transcript_ranks_by_the_chosen_source(cfg, by, value, col):
                            ("ALL GPA", [RankItem("Ann Lee", 3.2), RankItem("Bob Ray", None)]),
                            ("STEM CRS %", [RankItem("Ann Lee", 40.0), RankItem("Bob Ray", None)])]
     body = create_app(cfg["config"]).test_client().get(
-        "/view/summary", query_string={"category": "stem", "by": by}).get_data(as_text=True)
+        "/view/rank", query_string={"category": "stem", "by": by}).get_data(as_text=True)
     for v in ("3.5", "3.2", "40.0"):
         assert f'data-sort="{v}">{float(v):.2f}</td>' in body
     # the folded cell, hidden until ▼: all three, no sort of its own
@@ -198,7 +198,7 @@ def test_transcript_rejects_an_unknown_source_and_the_page_falls_back(cfg):
     with pytest.raises(ValueError):
         Transcript(cfg, "jev", "stem", "bogus")
     body = create_app(cfg["config"]).test_client().get(
-        "/view/summary", query_string={"category": "stem", "by": "bogus"}).get_data(as_text=True)
+        "/view/rank", query_string={"category": "stem", "by": "bogus"}).get_data(as_text=True)
     assert 'name="by" value="category-gpa" checked>' in body and "sortBy(1);" in body
 
 
@@ -272,7 +272,7 @@ def test_view_summary_has_a_recommendation_column_and_dialog(cfg):
     (Path(cfg["ranks"]) / "letter_ranks.csv").write_text(
         "filename,rank,confidence\nann_letter1.txt,good,0.9\n")
     client = create_app(cfg["config"]).test_client()
-    body = client.get("/view/summary", query_string={"category": "stem", "by": "category-pct"}).get_data(as_text=True)
+    body = client.get("/view/rank", query_string={"category": "stem", "by": "category-pct"}).get_data(as_text=True)
     ranks = body[body.index('<table id="rank-summary">'):]
     assert ">Score</button>" in ranks and ">Count</button>" in ranks
     assert '<td class="num sub-col" data-sort="80">80</td>' in ranks  # an int: as it is
@@ -298,7 +298,7 @@ def test_view_summary_has_a_recommendation_column_and_dialog(cfg):
 
 def test_view_summary_filters_by_the_recommend_letter_ranges(lettered):
     client = create_app(lettered["config"]).test_client()
-    body = client.get("/view/summary", query_string={
+    body = client.get("/view/rank", query_string={
         "category": "stem", "score_min": "80", "count_min": "2", "count_max": "9",
         "gpa_min": "3", "prof_show": "age"}).get_data(as_text=True)
     ranks = body[body.index('<table id="rank-summary">'):]
@@ -319,9 +319,9 @@ def test_view_summary_filters_by_the_recommend_letter_ranges(lettered):
             assert f'<input type="hidden" {hidden}>' in part
         assert 'name="score_max"' not in part
     # a reversed range is swapped; a bad bound (not a number, below 0, Score above 100) is ignored
-    body = client.get("/view/summary", query_string={"count_min": "3", "count_max": "1"}).get_data(as_text=True)
+    body = client.get("/view/rank", query_string={"count_min": "3", "count_max": "1"}).get_data(as_text=True)
     assert "<td>Count 1–3</td>" in body
-    body = client.get("/view/summary", query_string={
+    body = client.get("/view/rank", query_string={
         "score_min": "x", "score_max": "120", "count_min": "-1"}).get_data(as_text=True)
     config = body[body.index('<table class="rank-config">'):]
     assert ">Recommend Letter</button></td>\n      \n      <td>–</td>" in config
@@ -330,7 +330,7 @@ def test_view_summary_filters_by_the_recommend_letter_ranges(lettered):
 def test_without_a_transcript_column_the_page_sorts_by_the_recommend_letter_score(cfg):
     for csv_file in (Path(cfg["work-folder"]) / "jev").glob("*_gpa.csv"):
         csv_file.unlink()
-    body = create_app(cfg["config"]).test_client().get("/view/summary").get_data(as_text=True)
+    body = create_app(cfg["config"]).test_client().get("/view/rank").get_data(as_text=True)
     assert 'data-group="Transcript"' not in body
     assert '<th class="num sub-col" data-type="num" data-col="1" title="How strongly the letters recommend, together: 100 all excellent, 90 excellent and good, 80 all good, 70 at least one good, 60 all normal"><button type="button" class="sort">Score</button></th>' in body
     assert "sortBy(1);" in body
@@ -339,11 +339,11 @@ def test_without_a_transcript_column_the_page_sorts_by_the_recommend_letter_scor
 def test_view_summary_without_results_says_so(tmp_path):
     config = tmp_path / "config.yaml"
     config.write_text(f"work-folder: {tmp_path}\ninput-folder: {tmp_path / 'in'}\n")
-    body = create_app(config).test_client().get("/view/summary").get_data(as_text=True)
+    body = create_app(config).test_client().get("/view/rank").get_data(as_text=True)
     assert "has no results" in body
     assert '<button type="submit" disabled>Apply</button>' in body
     config.write_text(f"input-folder: {tmp_path / 'in'}\n")  # no work-folder
-    body = create_app(config).test_client().get("/view/summary").get_data(as_text=True)
+    body = create_app(config).test_client().get("/view/rank").get_data(as_text=True)
     assert 'class="error"' in body
 
 
@@ -353,7 +353,7 @@ def test_view_summary_all_valid_choice_marks_rows_with_every_column(cfg):
     (Path(cfg["work-folder"]) / "jev" / "stem_gpa.csv").write_text(  # all three Transcript values
         "student,STEM_GPA,all_courses_GPA,stem_all_pct,file\nAnn Lee,3.5,3.2,40.0,ann.pdf\n")
     body = create_app(cfg["config"]).test_client().get(
-        "/view/summary", query_string={"category": "stem"}).get_data(as_text=True)
+        "/view/rank", query_string={"category": "stem"}).get_data(as_text=True)
     # a dropdown after the View heading and before the row count, All chosen
     head = body[body.index('<div class="rank-view-head">'):body.index('id="rank-summary"')]
     assert head.index(">View</h2>") < head.index('<select id="rank-show"') < head.index('id="rank-count"')
@@ -469,7 +469,7 @@ def test_profile_filter_labels(profiled):
 
 def test_view_summary_profile_columns_dialog_and_filters(profiled):
     client = create_app(profiled["config"]).test_client()
-    body = client.get("/view/summary", query_string={"category": "stem"}).get_data(as_text=True)
+    body = client.get("/view/rank", query_string={"category": "stem"}).get_data(as_text=True)
     ranks = body[body.index('<table id="rank-summary">'):body.index("</table>", body.index('id="rank-summary"'))]
     # by default institution and program, text columns under Profile, foldable
     assert ('<th colspan="2" class="group" scope="colgroup" data-group="Profile" data-span="2">'
@@ -497,7 +497,7 @@ def test_view_summary_profile_columns_dialog_and_filters(profiled):
     assert '<th scope="row" title="M = major residence: the state the applicant mainly lives in">M.state</th>' in dialog
     assert '<input type="hidden" name="category" value="STEM">' in dialog
 
-    body = client.get("/view/summary", query_string=[
+    body = client.get("/view/rank", query_string=[
         ("category", "stem"), ("prof_show", "M.state"), ("prof_show", "age"), ("prof_show", "nope"),
         ("prof_show", "M.country"),
         ("prof_min.age", "25"), ("prof_max.age", "x"), ("prof_in.M.country", "india\n\n Mars \nINDIA"),
@@ -526,12 +526,12 @@ def test_view_summary_profile_columns_dialog_and_filters(profiled):
                           ("prof_in.M.country", "india"), ("prof_in.M.country", "Mars"),
                           ("prof_in.M.country", "Peru")]
     # a reversed range is swapped, a bad date ignored
-    body = client.get("/view/summary", query_string={
+    body = client.get("/view/rank", query_string={
         "prof_show": "age", "prof_min.age": "40", "prof_max.age": "10",
         "prof_min.birth_date": "2000-13"}).get_data(as_text=True)
     assert "<td>age 10–40</td>" in body
     # a filter on a field that is not shown is not applied
-    body = client.get("/view/summary", query_string={"prof_min.age": "40"}).get_data(as_text=True)
+    body = client.get("/view/rank", query_string={"prof_min.age": "40"}).get_data(as_text=True)
     assert "age ≥" not in body and ">Profile</button></td>\n      \n      <td>–</td>" in body
     # the dialog turns a row's filter off while its field is not shown
     assert "input.disabled = !box.checked;" in body and "Tick Show to filter by this field" in body
@@ -541,14 +541,14 @@ def test_view_summary_defaults_to_stem_and_institution_and_program(cfg):
     client = create_app(cfg["config"]).test_client()
     (Path(cfg["personal"]) / "eve.json").write_text(
         json.dumps({"name": "Eve Ng", "program": "Biology", "age": 30}))
-    body = client.get("/view/summary").get_data(as_text=True)
+    body = client.get("/view/rank").get_data(as_text=True)
     assert ">STEM GPA</button>" in body and '<option value="STEM" selected>STEM</option>' in body
     # only the default fields the profiles have: program (no institution)
     assert ">program</button>" in body and ">institution</button>" not in body and "<td class=\"sub-col\">Biology</td>" in body
     # without a STEM result, the first category; without either default field, the first field
     (Path(cfg["work-folder"]) / "jev" / "stem_gpa.csv").unlink()
     (Path(cfg["personal"]) / "eve.json").write_text(json.dumps({"name": "Eve Ng"}))
-    body = client.get("/view/summary").get_data(as_text=True)
+    body = client.get("/view/rank").get_data(as_text=True)
     assert ">LAW GPA</button>" in body and ">LAW CRS %</button>" in body
     assert ">age</button>" in body
 
@@ -560,7 +560,7 @@ def test_view_summary_each_column_applies_only_its_own_filter(profiled):
     every = ["Ann Lee", "Bob Ray", "Dee Lo", "Eve Ng"]
     def rows(**query):
         """{name: (STEM GPA, letter Count, institution)} for every row, and the Valid names"""
-        body = client.get("/view/summary", query_string={"category": "stem", **query}).get_data(as_text=True)
+        body = client.get("/view/rank", query_string={"category": "stem", **query}).get_data(as_text=True)
         tbody = body.split('<table id="rank-summary">')[1].split("<tbody>")[1].split("</tbody>")[0]
         table, valid = {}, []
         for row in tbody.split("</tr>")[:-1]:
@@ -638,10 +638,10 @@ def test_view_summary_page_filters_by_the_ranges(ranged):
     client = create_app(ranged["config"]).test_client()
     # no letter is ranked yet: nobody has a Score of 60 or more, so the Recommend
     # Letter cells are blank, but Ann keeps her GPA; nobody is Valid
-    body = client.get("/view/summary", query_string={
+    body = client.get("/view/rank", query_string={
         "category": "stem", "gpa_min": "3", "score_min": "60"}).get_data(as_text=True)
     assert 'data-sort="3.5">3.50</td>' in body and 'data-valid="yes"' not in body
-    body = client.get("/view/summary", query_string={
+    body = client.get("/view/rank", query_string={
         "category": "stem", "gpa_min": "3"}).get_data(as_text=True)
     ranks = body[body.index('<table id="rank-summary">'):]
     # Bob stays, only his STEM GPA (2.0) is blank; his ALL GPA stays
@@ -667,7 +667,7 @@ def test_view_summary_page_filters_by_the_ranges(ranged):
     assert 'name="gpa_max"' not in rec and 'name="pct_min"' not in rec
 
     # all three at once: one Filter line each
-    body = client.get("/view/summary", query_string={
+    body = client.get("/view/rank", query_string={
         "category": "stem", "by": "category-pct", "gpa_max": "3.6", "all_gpa_min": "3.5",
         "pct_min": "5", "pct_max": "50"}).get_data(as_text=True)
     assert "<td>STEM GPA ≤ 3.60<br>ALL GPA ≥ 3.50<br>STEM CRS % 5–50%</td>" in body
@@ -680,10 +680,10 @@ def test_view_summary_page_filters_by_the_ranges(ranged):
         assert f'<input type="hidden" {hidden}>' in prof
 
     # a reversed range is swapped; a bound out of range or not a number is ignored
-    body = client.get("/view/summary", query_string={
+    body = client.get("/view/rank", query_string={
         "category": "stem", "gpa_min": "3.6", "gpa_max": "3"}).get_data(as_text=True)
     assert "<td>STEM GPA 3.00–3.60</td>" in body and 'data-sort="3.5">3.50</td>' in body
-    body = client.get("/view/summary", query_string={
+    body = client.get("/view/rank", query_string={
         "category": "stem", "gpa_min": "9", "all_gpa_max": "x", "pct_min": "101"}).get_data(as_text=True)
     config = body[body.index('<table class="rank-config">'):]
     assert "Transcript</button></td>\n      \n      <td>–</td>" in config
@@ -697,7 +697,7 @@ def test_every_sortable_header_points_at_its_body_cell(cfg):
     (Path(cfg["ranks"]) / "letter_ranks.csv").write_text(
         "filename,rank,confidence\nann_letter1.txt,good,0.9\n")
     body = create_app(cfg["config"]).test_client().get(
-        "/view/summary", query_string={"category": "stem"}).get_data(as_text=True)
+        "/view/rank", query_string={"category": "stem"}).get_data(as_text=True)
     head = body[body.index("<thead>"):body.index("</thead>")]
     cols = {int(i): t for i, t in re.findall(r'data-col="(\d+)"(?: title="[^"]*")?><button type="button" class="sort">([^<]+)<', head)}
     assert sorted(cols) == [0, 1, 2, 3, 5, 6, 8]  # 4, 7 and 9 are the folded cells
@@ -715,7 +715,7 @@ def test_every_sortable_header_points_at_its_body_cell(cfg):
 def test_profile_sex_filter_is_m_and_f_unless_a_list_is_given(profiled):
     client = create_app(profiled["config"]).test_client()
     def page(query):
-        return client.get("/view/summary", query_string=[("category", "stem"), *query]).get_data(as_text=True)
+        return client.get("/view/rank", query_string=[("category", "stem"), *query]).get_data(as_text=True)
     # the dialog starts with M and F, also while sex is not shown
     body = page([])
     assert 'aria-label="sex values">M\nF</textarea>' in body

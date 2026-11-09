@@ -29,7 +29,7 @@ def folder(tmp_path):
 
 @pytest.fixture
 def inbox(tmp_path):
-    """<input-folder>/personal, where the .profile files are."""
+    """<input-folder>/personal, where the input .json files are."""
     inbox = tmp_path / "in" / "personal"
     inbox.mkdir(parents=True)
     return inbox
@@ -101,23 +101,22 @@ def test_view_with_no_profiles_says_so(tmp_path):
 def test_upload_reads_profile_files_and_saves_json(client, folder, inbox):
     page = client.get("/profiles/upload").get_data(as_text=True)
     assert 'href="/profiles/upload" class="sub active" aria-current="page">Profiles' in page
-    assert 'accept=".profile"' in page
+    assert 'accept=".json"' in page
     r = client.post("/profiles/upload", data={"profiles": [
-        (io.BytesIO(b'{"name": "Cy"}'), "../cy.profile")]}, content_type="multipart/form-data")
+        (io.BytesIO(b'{"name": "Cy"}'), "../cy.json")]}, content_type="multipart/form-data")
     assert r.status_code == 200
     assert r.get_json() == {"status": "done", "saved": ["cy.json"], "loaded": 3, "errors": [],
                             "filled": {"cy.json": ["institution", "program"]},
                             "unmatched": ["cy.json"]}
-    assert (inbox / "cy.profile").read_bytes() == b'{"name": "Cy"}'  # the source is kept as it came
-    assert (folder / "cy.json").is_file() and not (inbox / "cy.json").exists()
-    assert not (folder / "cy.profile").exists()
+    assert (inbox / "cy.json").read_bytes() == b'{"name": "Cy"}'  # the source is kept as it came
+    assert (folder / "cy.json").is_file()
     assert profile_load.PROFILES["cy.json"] == {"name": "Cy", "institution": None, "program": None}
 
 
 def test_upload_with_no_files_converts_every_profile_in_the_folder(client, folder, inbox):
     (folder / "ann.json").unlink()
-    (inbox / "ann.profile").write_text('{"name": "Ann New"}')
-    (inbox / "dee.profile").write_text('{"name": "Dee"}')
+    (inbox / "ann.json").write_text('{"name": "Ann New"}')
+    (inbox / "dee.json").write_text('{"name": "Dee"}')
     r = client.post("/profiles/upload", data={}, content_type="multipart/form-data")
     assert r.get_json()["saved"] == ["ann.json", "dee.json"] and r.get_json()["loaded"] == 3
     assert json.loads((folder / "ann.json").read_text()) == {"name": "Ann New", "institution": None,
@@ -129,17 +128,17 @@ def test_upload_with_no_files_and_no_profiles_says_so(tmp_path):
     config.write_text(CONFIG.format(tmp=tmp_path))
     r = create_app(config).test_client().post("/profiles/upload", data={},
                                               content_type="multipart/form-data")
-    assert r.status_code == 400 and "no .profile files" in r.get_json()["error"]
+    assert r.status_code == 400 and "no .json files" in r.get_json()["error"]
 
 
 def test_upload_rejects_non_profiles_and_writes_nothing(client, folder, inbox):
-    for name, data in (("x.json", b"{}"), ("x.txt", b"{}"), ("x.profile", b"{bad"),
-                       ("x.profile", b"[1]")):
+    for name, data in (("x.profile", b"{}"), ("x.txt", b"{}"), ("x.json", b"{bad"),
+                       ("x.json", b"[1]")):
         r = client.post("/profiles/upload", data={"profiles": [
-            (io.BytesIO(b'{"ok": 1}'), "ok.profile"), (io.BytesIO(data), name)]},
+            (io.BytesIO(b'{"ok": 1}'), "ok.json"), (io.BytesIO(data), name)]},
             content_type="multipart/form-data")
         assert r.status_code == 400 and r.get_json()["error"]
-    for name in ("ok.profile", "ok.json", "x.profile", "x.json"):
+    for name in ("ok.json", "x.json", "x.profile"):
         assert not (folder / name).exists() and not (inbox / name).exists()
 
 
@@ -181,9 +180,9 @@ def test_upload_fills_in_from_the_matching_transcript(tmp_path, folder, inbox):
     config = tmp_path / "config.yaml"
     config.write_text(CONFIG.format(tmp=tmp_path))
     client = create_app(config).test_client()
-    (inbox / "ann.profile").write_text(json.dumps({"name": "Ann Lee", "age": 20}))
-    (inbox / "bob.profile").write_text(json.dumps({"name": "Bob Ray", "institution": "OWN U"}))
-    (inbox / "cy.profile").write_text(json.dumps({"name": "Cy"}))
+    (inbox / "ann.json").write_text(json.dumps({"name": "Ann Lee", "age": 20}))
+    (inbox / "bob.json").write_text(json.dumps({"name": "Bob Ray", "institution": "OWN U"}))
+    (inbox / "cy.json").write_text(json.dumps({"name": "Cy"}))
     data = client.post("/profiles/upload", data={}, content_type="multipart/form-data").get_json()
     assert data["filled"] == {"ann.json": ["institution", "program"], "bob.json": ["program"],
                               "cy.json": ["institution", "program"]}
@@ -192,7 +191,7 @@ def test_upload_fills_in_from_the_matching_transcript(tmp_path, folder, inbox):
         "name": "Ann Lee", "age": 20, "institution": "STATE U", "program": "Biology"}
     assert json.loads((folder / "bob.json").read_text()) == {
         "name": "Bob Ray", "institution": "OWN U", "program": "Law"}
-    assert "program" not in json.loads((inbox / "ann.profile").read_text())
+    assert "program" not in json.loads((inbox / "ann.json").read_text())
 
 
 def test_student_dialog_has_the_students_profile(tmp_path, folder):

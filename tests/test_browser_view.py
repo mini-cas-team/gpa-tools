@@ -56,7 +56,7 @@ def test_root_is_a_welcome_page_linking_every_page(client):
     assert "Welcome." in body and 'id="upload-form"' not in body
     for href in ("/transcripts/ftp-upload", "/transcripts/view",
                  "/letters/ftp-upload", "/letters/view", "/profiles/upload", "/profiles/view",
-                 "/summary", "/view/summary"):
+                 "/summary", "/view/rank"):
         assert f'<a href="{href}">' in body
     assert "/transcripts/category-build" not in body
     assert 'aria-current="page"' not in body  # no nav item is the welcome page
@@ -71,7 +71,7 @@ def test_left_bar_groups_pages_by_action(client):
                                     'href="/letters/ftp-upload" class="sub">Recommendations',
                                     'href="/profiles/upload" class="sub">Profiles',
                                     '<span class="group">View</span>',
-                                    'href="/view/summary" class="sub">Rank',
+                                    'href="/view/rank" class="sub">Rank',
                                     'href="/transcripts/view" class="sub active" aria-current="page">Transcripts',
                                     'href="/letters/view" class="sub">Recommendations',
                                     'href="/profiles/view" class="sub">Profiles')]

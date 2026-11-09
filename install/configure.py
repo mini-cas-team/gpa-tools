@@ -49,7 +49,7 @@ TEMPLATE = """\
 # folder of what the tools make from it, <work-folder>/<component>/:
 #   transcripts  <name>.pdf             -> <name>.txt, <name>.common.json
 #   letters      <key>_letter<N>.pdf    -> <key>_letter<N>.txt, letter_ranks.csv
-#   personal     <name>.profile         -> <name>.json
+#   personal     <name>.json            -> <name>.json
 components: [transcripts, letters, personal]
 input-folder: ~/gpa-tools-data # raw input, never written by a run
 work-folder: ~/gpa-tools-data/work # made from the input; builders keep their files in <work-folder>/<builder>/

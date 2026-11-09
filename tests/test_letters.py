@@ -360,7 +360,7 @@ def test_every_view_page_has_whole_scripts(client):
     """Each <script> closes before the next opens: an unclosed one turns the rest of
     the page's JavaScript into a syntax error, and no student dialog opens."""
     import re
-    for url in ("/transcripts/view", "/letters/view", "/profiles/view", "/view/summary"):
+    for url in ("/transcripts/view", "/letters/view", "/profiles/view", "/view/rank"):
         html = client.get(url).get_data(as_text=True)
         assert html.count("<script>") == html.count("</script>"), url
         for script in re.findall(r"<script>(.*?)</script>", html, re.S):

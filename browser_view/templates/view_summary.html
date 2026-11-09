@@ -95,12 +95,12 @@
   </tbody>
 </table>
 {# Ask AI: a request in the user's own words; rank_ai turns it into the filters
-   above (POST /view/summary/ask with this page's query), and the page reloads
+   above (POST /view/rank/ask with this page's query), and the page reloads
    with them. The answer's explanation is kept for the reloaded page. #}
 <form class="rank-ask" id="ask-form" aria-labelledby="ask-heading">
   <h3 id="ask-heading">Ask AI</h3>
   <textarea name="question" id="ask-question" rows="3" aria-labelledby="ask-heading" required
-            placeholder="Describe the students to show, in your own words"></textarea>
+            placeholder="Describe the students to show, in your own words. ↑ ↓ recall earlier requests."></textarea>
   <div class="ask-row">
     <span class="hint" id="ask-status" aria-live="polite"></span>
     <button type="submit" id="ask-go">Go</button>
@@ -111,7 +111,7 @@
 </div>
 
 <dialog id="transcript-dialog" class="small" aria-labelledby="transcript-dialog-title">
-  <form method="get" action="/view/summary" id="transcript-form">
+  <form method="get" action="/view/rank" id="transcript-form">
     {% for source, (low, high) in rec_ranges.items() %}{% set prefix = rec_filters[source][0] %}
     {% if low is not none %}<input type="hidden" name="{{ prefix }}_min" value="{{ low }}">{% endif %}
     {% if high is not none %}<input type="hidden" name="{{ prefix }}_max" value="{{ high }}">{% endif %}
@@ -165,7 +165,7 @@
 </dialog>
 
 <dialog id="recommendation-dialog" class="small" aria-labelledby="recommendation-dialog-title">
-  <form method="get" action="/view/summary" id="recommendation-form">
+  <form method="get" action="/view/rank" id="recommendation-form">
     {# Keep the Transcript column's choice. #}
     {% if selected %}<input type="hidden" name="category" value="{{ selected }}">{% endif %}
     <input type="hidden" name="by" value="{{ by }}">
@@ -208,7 +208,7 @@
 </dialog>
 
 <dialog id="profile-dialog" class="medium" aria-labelledby="profile-dialog-title">
-  <form method="get" action="/view/summary" id="profile-form">
+  <form method="get" action="/view/rank" id="profile-form">
     {# Keep the other columns' choices. #}
     {% if selected %}<input type="hidden" name="category" value="{{ selected }}">{% endif %}
     <input type="hidden" name="by" value="{{ by }}">
@@ -385,16 +385,60 @@
       showNote(saved);
     }
   } catch {}
+  // History: the requests sent, oldest first, kept in this browser (storage can be
+  // blocked: there is then only this page's history). `askAt` is the entry the box
+  // shows; history.length means the box's own text, kept in `askDraft`.
+  const HISTORY_KEY = "student-rank-ask-history";
+  const HISTORY_MAX = 100;
+  let askHistory = [];
+  try {
+    const saved = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+    if (Array.isArray(saved)) askHistory = saved.filter((q) => typeof q === "string");
+  } catch {}
+  let askAt = askHistory.length;
+  let askDraft = "";
+  function remember(question) {  // a repeated request moves to the newest place
+    askHistory = askHistory.filter((q) => q !== question);
+    askHistory.push(question);
+    askHistory = askHistory.slice(-HISTORY_MAX);
+    askAt = askHistory.length;
+    askDraft = "";
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(askHistory)); } catch {}
+  }
+  function stepHistory(delta) {
+    const fromDraft = askAt === askHistory.length;
+    if (fromDraft) askDraft = askBox.value;
+    let next = askAt + delta;
+    // The box may already show the newest request (kept after an answer): go past it.
+    if (fromDraft && delta < 0 && askHistory[next] === askBox.value.trim()) next--;
+    if (next < 0 || next > askHistory.length) return;
+    askAt = next;
+    askBox.value = askAt === askHistory.length ? askDraft : askHistory[askAt];
+    askBox.setSelectionRange(askBox.value.length, askBox.value.length);
+  }
+  askBox.addEventListener("input", () => { askAt = askHistory.length; });  // edited: now the box's own text
   askBox.addEventListener("keydown", (e) => {  // Enter sends; Shift+Enter is a new line
-    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    if (e.isComposing) return;
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       askForm.requestSubmit();
+      return;
     }
+    // ↑ on the first line and ↓ on the last move over the history; elsewhere they move the caret.
+    if ((e.key !== "ArrowUp" && e.key !== "ArrowDown") || !askHistory.length || askBox.readOnly) return;
+    if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+    const { value, selectionStart: start, selectionEnd: end } = askBox;
+    if (start !== end) return;
+    const up = e.key === "ArrowUp";
+    if (up ? value.slice(0, start).includes("\n") : value.slice(end).includes("\n")) return;
+    e.preventDefault();
+    stepHistory(up ? -1 : 1);
   });
   askForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const question = askBox.value.trim();
     if (!question) return;
+    remember(question);
     askGo.disabled = askBox.readOnly = true;
     askNote.hidden = true;
     const started = Date.now();
@@ -403,7 +447,7 @@
     const timer = setInterval(tick, 1000);
     let note;
     try {
-      const resp = await fetch(`/view/summary/ask${location.search}`, {
+      const resp = await fetch(`/view/rank/ask${location.search}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question }),
       });
@@ -487,6 +531,39 @@
       if (folded) foldedGroups.push(groupTh.dataset.group);
       try { localStorage.setItem(FOLD_KEY, JSON.stringify(foldedGroups)); } catch {}
     });
+  }
+
+  // ---- Orange: the columns that are new, or whose values differ, since this tab
+  // last showed the page. Reloading the same page keeps the marks. A folded column
+  // holds its sub-columns' values, so it is compared like any other. ------------
+  const COLUMNS_KEY = "student-rank-columns";  // {search, columns: {key: its values}, marked: [key]}
+  const columnKey = (th) => (th.dataset.fold === undefined ? th.textContent.trim() : `fold:${th.dataset.group}`);
+  const columnIndex = (th) => Number(th.dataset.fold === undefined ? th.dataset.col : th.dataset.fold);
+  const rankRows = [...table.tBodies[0].rows];
+  const rankHeads = [...table.tHead.querySelectorAll("th[data-col], th[data-fold]")];
+  const columnValues = {};
+  for (const th of rankHeads) {
+    const index = columnIndex(th);
+    columnValues[columnKey(th)] = rankRows
+      .map((row) => `${row.cells[0].textContent.trim()}\t${row.cells[index].textContent.trim()}`)
+      .sort().join("\n");
+  }
+  let lastColumns = null;
+  try { lastColumns = JSON.parse(sessionStorage.getItem(COLUMNS_KEY) || "null"); } catch {}
+  let markedColumns = [];
+  if (lastColumns && lastColumns.columns) {  // the first view in a tab has nothing to compare with
+    const changed = Object.keys(columnValues).filter((key) => columnValues[key] !== lastColumns.columns[key]);
+    markedColumns = changed.length || lastColumns.search !== location.search ? changed : (lastColumns.marked || []);
+  }
+  try {
+    sessionStorage.setItem(COLUMNS_KEY, JSON.stringify(
+      { search: location.search, columns: columnValues, marked: markedColumns }));
+  } catch {}
+  for (const th of rankHeads) {
+    if (!markedColumns.includes(columnKey(th))) continue;
+    th.classList.add("changed");
+    const index = columnIndex(th);
+    for (const row of rankRows) row.cells[index].classList.add("changed");
   }
 
   // Open sorted by Transcript's Rank by (also when folded: the rows keep that
