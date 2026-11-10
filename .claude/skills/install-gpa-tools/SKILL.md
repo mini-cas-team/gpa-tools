@@ -102,7 +102,7 @@ ask again.
 
 **Ask** where the data should live. Offer the default `~/gpa-tools-data`, which
 becomes `input-folder` with one subfolder per component for the raw input,
-`transcripts/` (PDFs), `letters/` (letter PDFs) and `personal/` (`.profile`
+`transcripts/` (PDFs), `letters/` (letter PDFs) and `personal/` (`.json`
 files), plus `work/` (everything made from the input, again one subfolder per
 component, and one `work/<builder>/` folder per category builder), `out/` (the
 published `<cat>_gpa.csv` files other applications read) and `log/`. Also ask
