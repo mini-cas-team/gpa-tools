@@ -7,7 +7,7 @@ category's definition is drafted by `category-definer`, through ChatGPT's or
 Gemini's free web chat or the local LLM, and then edited by you.
 
 Everything runs on your machine (the **client**) except the calls to Jev, which
-go through the gpa-tools **cloud server** (`jev_cloud/`). The TypeSafe API key
+go through the gpa-tools **cloud server** (a Cloudflare Worker, kept in the private repo `mini-cas-team/gpa-tools-cloud`). The TypeSafe API key
 lives only there, and the server shares course scores between clients. See
 [Client and cloud server](#client-and-cloud-server).
 
@@ -275,10 +275,11 @@ STEM, for restoring later.
 Uses [TypeSafe](https://docs.typesafe.ai)'s hosted Jev model, reached one of
 two ways (`mode`):
 
-- **cloud** (production): through the gpa-tools cloud server, `jev_cloud/`
-  (a Cloudflare Worker; see `jev_cloud/README.md`). The TypeSafe key lives
-  only there; this machine needs a client token from the server's admin, in
-  the variable `cloud-token-env` names (`export GPA_TOOLS_CLOUD_TOKEN=gpat_...`).
+- **cloud** (production): through the gpa-tools cloud server at `cloud-url`
+  (a Cloudflare Worker; its code is in the private repo `gpa-tools-cloud`). The
+  TypeSafe key lives only there. This laptop needs only its own client token in
+  `~/.gpa-tools/client_token`, approved by the package owner (see
+  [This laptop's token](#this-laptops-token)).
   The server keeps every course score it has asked Jev for and shares it with
   every client using the same definition, so a course one client paid for is
   free for the rest. The questions are in `jev_core/prompts.json`; the server
@@ -563,10 +564,10 @@ neither belongs on a network without authentication in front of it.
 
 In production gpa-tools runs in two places:
 
-| | Client (your machine) | Cloud server (`jev_cloud/`) |
+| | Client (your machine) | Cloud server (private repo `gpa-tools-cloud`) |
 |---|---|---|
 | Runs | everything: upload, builders, letters, profiles, the web UI | only the Jev calls |
-| Code | Python (this repo, minus `jev_cloud/`) | JavaScript: plain Node now, a Cloudflare Worker later |
+| Code | Python (this repo, public) | JavaScript: a Cloudflare Worker, or plain Node for testing |
 | Secret | a client token (`~/.gpa-tools/client_token`) | the TypeSafe API key, and the admin token |
 | Keeps | transcripts, letters, profiles, every CSV, its own score cache | course scores shared by all clients, definitions, tokens, usage |
 
@@ -576,15 +577,11 @@ request (`jev_core/fixtures.json`).
 
 ### Running it
 
-For now the server runs locally on Node and keeps its data in a folder. Later it
-moves to Cloudflare with no code change: the same files go into R2 instead
-(`jev_cloud/README.md` has the deploy steps).
+The server is deployed at `https://gpa-tools-jev.johnprofessional132.workers.dev`.
+Its code, deploy steps and a local test server (`npm start`, port 8787) are in the
+private repo `gpa-tools-cloud`; a laptop needs none of it.
 
 ```bash
-# terminal 1: the cloud server (http://127.0.0.1:8787, data in jev_cloud/data/)
-cd jev_cloud && npm start              # reads TYPESAFE_API_KEY and ADMIN_TOKEN from jev_cloud/.dev.vars
-
-# terminal 2: the client
 .venv/bin/python -m browser_view       # http://127.0.0.1:5001 (the laptop's token: below)
 ```
 
@@ -593,7 +590,7 @@ cd jev_cloud && npm start              # reads TYPESAFE_API_KEY and ADMIN_TOKEN 
 category-builder:
   jev:
     mode: cloud                        # direct: TypeSafe itself, with the key in api-key-env (development)
-    cloud-url: http://127.0.0.1:8787   # later https://gpa-tools-jev.<account>.workers.dev
+    cloud-url: https://gpa-tools-jev.johnprofessional132.workers.dev   # the owner's local test server: http://127.0.0.1:8787
     cloud-token-env: GPA_TOOLS_CLOUD_TOKEN
 ```
 
@@ -661,8 +658,7 @@ Student names, grades, credits and GPAs never do; the GPA is computed locally.
 | `scores/<model>/<CAT>/<sha256(definition)[:16]>.json` | server | the same `"CODE\|title": score` map, from all clients |
 | `definitions/<CAT>.json`, `tokens.json`, `usage/<day>/<token hash>.json` | server | shared definitions (the first client's, never replaced), token hashes, daily Jev questions per token |
 
-The server's files are under `jev_cloud/data/` (git-ignored) now, and in R2 once
-it is deployed.
+The server's files are in its R2 bucket (and in `data/` of the private repo when it runs locally).
 
 ### When Jev is asked
 
@@ -716,13 +712,12 @@ llm_category/     the llm builder (python -m llm_category)
   builder.py      load_config / run / estimate
   llm.py          the Ollama prompts
   store.py        answer cache
-jev_core/         the Jev questions (prompts.json) and request format, shared with jev_cloud
+jev_core/         the Jev questions (prompts.json) and request format, shared with the cloud server (a copy lives in gpa-tools-cloud)
 jev_category/     the jev builder (python -m jev_category)
   builder.py      load_config / run / estimate; client(cfg) picks cloud or direct
   client.py       CloudClient (the cloud server) and JevClient (TypeSafe, direct mode)
   store.py        score cache
   seed.py         upload local scores to the cloud's shared store
-jev_cloud/        the cloud server (JavaScript; local Node + folder now, Cloudflare Worker + R2 later; see its README)
 out_builder/      publish <cat>_gpa.csv to out-folder (python -m out_builder)
 letter_builder/   recommendation letters: pdf2txt, then rank_letters with Jev
 browser_view/     Flask UI: transcript and letter pages (python -m browser_view)
@@ -739,15 +734,18 @@ tests/
 ```
 
 The tests need neither Ollama, pdftotext, a browser nor TypeSafe: all are
-replaced by fakes. The cloud server has its own, run with Node 22.5+ and no
-npm install (R2 and TypeSafe are faked):
-`cd jev_cloud && npm test`. They cover transcript conversion and GPA, the builder
+replaced by fakes. The cloud server's tests are in its own repo. They cover transcript conversion and GPA, the builder
 registry and CSV output, both builders and their caches, definitions, the
 definer's modes and attempt log, reply parsing, which model does which job,
 publishing, every browser_view route, and the installer's config editing and
 model choice.
 
 ## Changes
+
+### 2026-11-12: the cloud server moved to a private repo
+
+- **`jev_cloud/` moved.** It now lives in the private repo `mini-cas-team/gpa-tools-cloud`, with its history. This repo is the client only.
+- **`jev_core/` stays here.** It is still edited here. The server keeps a copy, refreshed with its `scripts/sync_jev_core.sh`.
 
 ### 2026-11-11: laptops ask for their own cloud token
 

@@ -19,7 +19,7 @@ FIXTURES = json.loads((Path(jev_core.__file__).with_name("fixtures.json")).read_
 
 
 def test_jev_core_builds_the_shared_fixtures():
-    """jev_cloud/test/worker.test.js checks the JavaScript side against the same file."""
+    """gpa-tools-cloud's test/worker.test.js checks the JavaScript side against the same file."""
     c = FIXTURES["course"]
     assert jev_core.course_body(c["model"], c["category"], c["definition"],
                                 [tuple(x) for x in c["courses"]]) == c["body"]

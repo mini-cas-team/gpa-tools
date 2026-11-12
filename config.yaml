@@ -27,7 +27,7 @@ category-builder:
     category-definition-model: qwen2.5:7b # category-definer's ollama step; one call per category, so a bigger model is affordable
     ollama-url: http://localhost:11434 # any model in `ollama list` there
   jev: # TypeSafe's Jev scores each course 0-1; logs to <log-folder>/jev_category.log
-    mode: cloud # direct: call TypeSafe with the key in api-key-env (development); cloud: the gpa-tools cloud server (jev_cloud/) holds the key
+    mode: cloud # direct: call TypeSafe with the key in api-key-env (development); cloud: the gpa-tools cloud server (the private repo gpa-tools-cloud) holds the key
     cloud-url: https://gpa-tools-jev.johnprofessional132.workers.dev # mode cloud: the server (Cloudflare; local test server: http://127.0.0.1:8787)
     cloud-token-env: GPA_TOOLS_CLOUD_TOKEN # mode cloud: name of the env var holding this client's token
     model: jev-1.14.0 # mode direct only (the cloud picks its own); a version pins it; `jev-latest` follows new releases

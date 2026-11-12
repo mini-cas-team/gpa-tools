@@ -1,7 +1,7 @@
 """The Jev questions and request format, shared by the client and the cloud server.
 
 The question text lives in ``prompts.json`` so that the cloud server
-(jev_cloud/, JavaScript on Cloudflare Workers) and the client's direct mode
+(the private repo gpa-tools-cloud, JavaScript on Cloudflare Workers) and the client's direct mode
 (this module) send TypeSafe exactly the same request; both test suites check
 their output against ``fixtures.json``.  No network and no API key here.
 """

@@ -50,7 +50,7 @@ def test_weighted_gpa():
 
 
 class FakeCloud:
-    """The cloud's definition calls: create-only, like jev_cloud."""
+    """The cloud's definition calls: create-only, like the cloud server."""
 
     def __init__(self, shared=None, down=False):
         self.shared = dict(shared or {})

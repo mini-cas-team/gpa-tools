@@ -382,7 +382,7 @@ def jev_model_ok(model: str, listed: list[str]) -> bool:
 
 
 def probe_cloud(cloud_url: str, token: str, timeout: float = 10) -> dict:
-    """Whether the gpa-tools cloud server (jev_cloud) answers and accepts the
+    """Whether the gpa-tools cloud server (gpa-tools-cloud) answers and accepts the
     client token; the Jev model it uses.  /v1/info asks Jev nothing (free)."""
     url = cloud_url.rstrip("/") + "/v1/info"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}",

@@ -1,5 +1,5 @@
 {
-  "_comment": "What jev_core (Python) and jev_cloud/src/jev.js must build for these inputs; regenerate only when prompts.json changes on purpose.",
+  "_comment": "What jev_core (Python) and gpa-tools-cloud's src/jev.js must build for these inputs; regenerate only when prompts.json changes on purpose.",
   "course": {
     "model": "jev-1.14.0",
     "category": "STEM",

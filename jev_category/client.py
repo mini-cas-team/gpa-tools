@@ -7,7 +7,7 @@ ranking never know which one they have:
 
 JevClient (mode: direct, development only) calls TypeSafe itself and needs the
 TypeSafe API key on this machine.  CloudClient (mode: cloud) calls the
-gpa-tools cloud server (jev_cloud/), which holds the key, builds the same
+gpa-tools cloud server (the private repo gpa-tools-cloud), which holds the key, builds the same
 request from jev_core/prompts.json, and shares course scores between clients;
 this machine only needs a client token.  API reference:
 https://docs.typesafe.ai/api.md

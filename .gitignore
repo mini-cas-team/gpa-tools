@@ -22,5 +22,8 @@ out/
 # category-definer's Chrome profiles when there is no work-folder
 .browser-profiles/
 
+# the cloud server lives in the private repo gpa-tools-cloud: never add it here
+jev_cloud/
+
 # Installer: micromamba and its poppler env (install/get_tools.py)
 .tools/

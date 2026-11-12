@@ -6,7 +6,7 @@ cached), and writes the builder CSVs into <work-folder>/jev/.  A course is in
 the category when its score is above the threshold.  Settings come from
 config.yaml.  ``mode`` says how Jev is reached:
 
-    cloud   through the gpa-tools cloud server (jev_cloud/), which holds the
+    cloud   through the gpa-tools cloud server (the private repo gpa-tools-cloud), which holds the
             TypeSafe key and shares course scores between clients; this
             machine needs only a client token, in the variable cloud-token-env
     direct  TypeSafe itself (development only); the API key is in the

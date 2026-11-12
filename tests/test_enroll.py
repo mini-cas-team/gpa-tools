@@ -10,7 +10,7 @@ from jev_category.client import JevError
 
 
 class FakeServer:
-    """The enrollment endpoints of jev_cloud: requests by token hash, decided by hand."""
+    """The enrollment endpoints of the cloud server: requests by token hash, decided by hand."""
 
     def __init__(self):
         self.requests: dict[str, dict] = {}

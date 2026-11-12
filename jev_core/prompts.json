@@ -1,5 +1,5 @@
 {
-  "_comment": "The Jev questions, shared by the cloud server (jev_cloud, JavaScript) and the client's direct mode (jev_core, Python). Change them here only; tests on both sides check jev_core/fixtures.json.",
+  "_comment": "The Jev questions, shared by the cloud server (gpa-tools-cloud, JavaScript) and the client's direct mode (jev_core, Python). Change them here only; tests on both sides check jev_core/fixtures.json.",
   "courses": {
     "instructions": "Using only `definition`, is the university course `{key}` in the category `category`?",
     "criteria": {
