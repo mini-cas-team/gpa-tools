@@ -34,14 +34,23 @@ There are two branches:
 | **Production** | `prod`: released versions only | everyone using gpa-tools | `run_mode: prod`: categories come only from the cloud server, no drafting or editing, developer details hidden |
 | **Development** | `master`: the latest code | the few developers | `run_mode: dev`: everything, including drafting new categories for the cloud |
 
-Production:
+Production: install git and Python 3.14 or 3.12 first, then run the installer
+from the gpa-tools cloud server (run it again later to update):
 
 ```bash
-git clone --branch prod https://github.com/mini-cas-team/gpa-tools.git
-cd gpa-tools
-claude                     # then type:  /install-from-clone, then /install-gpa-tools
-git pull                   # later: update to the latest release; config.yaml is never touched
+curl -fsSL https://gpa-tools-jev.johnprofessional132.workers.dev/install.sh | bash             # Linux (Ubuntu), macOS
 ```
+
+```powershell
+irm https://gpa-tools-jev.johnprofessional132.workers.dev/install.ps1 | iex                    # Windows PowerShell
+```
+
+It clones `prod` into `~/gpa-tools`, builds the venv, installs pdftotext if missing,
+writes config.yaml (data in `~/gpa-tools-data`) and asks for this laptop's cloud
+token with your email; the package owner approves it. With an AI agent (Claude
+Code, Codex, ...), point it at `https://gpa-tools-jev.johnprofessional132.workers.dev/SKILL.md`, the same install as a skill (Claude
+Code: save it as `~/.claude/skills/install-gpa-tools/SKILL.md`). The installers live
+in the private repo gpa-tools-cloud (`public/`), not here.
 
 Development:
 
@@ -61,16 +70,17 @@ builds `.venv` with the best supported one (3.14, else 3.12, else uv fetches
 `python3 install/setup_venv.py --dry-run` shows the plan, and without
 `--dry-run` it does it.
 
-The `/install-gpa-tools` skill does a production install, in your own user account
-and with no admin rights, on Linux, macOS or Windows:
+The cloud installer does the production install, in your own user account
+and with no admin rights:
 - the venv (Python 3.14 or 3.12) and packages (Playwright among them; it drives the installed Chrome or Edge)
 - pdftotext (into `.tools/`, if it's missing)
-- `config.yaml`: folders, the cloud server, the definer's mode, set by `install/configure.py`
+- `config.yaml`: folders and the cloud server, set by `install/configure.py`
 - this laptop's cloud token: it asks with your email, and the package owner approves it
 
 No local model, no GPU and no multi-GB downloads: the heavy work is Jev's, in the cloud.
 
-It checks what is already installed first and asks before downloading. See
+Every step skips what is already there. It runs the scripts in `install/` of the
+code it cloned (so they always match that version); see
 [install/README.md](install/README.md) for the scripts it uses, which also
 work by hand. `config.yaml` is this machine's own and not in git, so updating
 with `git pull` never touches it.
@@ -698,7 +708,7 @@ letter_builder/   recommendation letters: pdf2txt, then rank_letters with Jev
 browser_view/     Flask UI: transcript and letter pages (python -m browser_view)
 summary/          Student Rank's columns (summary.ABS subclasses)
 rank_ai/          Student Rank's Ask AI: prompt, providers, answer checks
-install/          per-user installer scripts (used by /install-gpa-tools)
+install/          per-user install scripts (run by the cloud installer, and by hand)
 tests/
 ```
 
@@ -730,7 +740,7 @@ installer's config editing.
   It was removed from git, so on an older clone `git pull` deletes the tracked
   copy, or stops if you edited it. Copy your config.yaml aside first, and put it
   back after the pull.
-- **`/install-gpa-tools` installs production only**, and checks it is on `prod`.
+- **The installer installs production only** (the `prod` branch).
 
 ### 2026-11-12: Ollama removed
 

@@ -25,7 +25,7 @@ Keep the code runnable on 3.12 while developing on 3.14: no 3.13+/3.14 syntax (u
 
 Tests need no pdftotext, browser, TypeSafe API or cloud server. All of them are faked, and `tests/conftest.py` puts the repo root and `install/` on `sys.path`. There is no linter or build step.
 
-Setting up a machine (venv, pdftotext, `config.yaml`, this laptop's cloud token) is done by the `/install-gpa-tools` skill (`.claude/skills/install-gpa-tools/`), which uses the scripts in `install/`. The venv alone, from a fresh clone, is the `/install-from-clone` skill: `install/setup_venv.py` picks the Python (`plan()`: 3.14, else 3.12, else uv; never installs uv or a Python itself) and installs `requirements.txt` + pytest.
+Setting up a production machine (venv, pdftotext, `config.yaml`, this laptop's cloud token) is done by the installers served by the cloud server: `https://gpa-tools-jev.johnprofessional132.workers.dev/install.sh` (Linux/macOS), `install.ps1` (Windows) and `SKILL.md` (the same for an AI agent), kept in gpa-tools-cloud's `public/` (never here). They check git and Python 3.14/3.12 (prerequisites the user installs), clone `prod`, then run this repo's `install/` scripts, so those stay here, versioned with the code: keep their command-line options stable, or change the installers with them. The venv alone, from a fresh clone, is the `/install-from-clone` skill: `install/setup_venv.py` picks the Python (`plan()`: 3.14, else 3.12, else uv; never installs uv or a Python itself) and installs `requirements.txt` + pytest.
 
 ## Architecture
 

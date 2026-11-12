@@ -1,6 +1,6 @@
 ---
 name: install-from-clone
-description: Install gpa-tools' Python code from a fresh GitHub clone - find which Pythons the machine has, build the project's .venv with the best supported one (3.14, else 3.12; else uv fetches 3.14 for this user), install requirements.txt and pytest, and prove it with the test suite. Use when the user has just cloned the repo (https://github.com/mini-cas-team/gpa-tools) and asks to install it, set up the venv or Python, or check which Python the project can use, or when .venv is missing, broken, or built with an unsupported Python. For the rest of the machine (pdftotext, config.yaml, the jev builder and this laptop's cloud token, the definer) hand over to /install-gpa-tools.
+description: Install gpa-tools' Python code from a fresh GitHub clone - find which Pythons the machine has, build the project's .venv with the best supported one (3.14, else 3.12; else uv fetches 3.14 for this user), install requirements.txt and pytest, and prove it with the test suite. Use when the user has just cloned the repo (https://github.com/mini-cas-team/gpa-tools) and asks to install it, set up the venv or Python, or check which Python the project can use, or when .venv is missing, broken, or built with an unsupported Python. For the rest of the machine (pdftotext, config.yaml, the jev builder and this laptop's cloud token, the definer) hand over to the cloud installer (install.sh / install.ps1 from the cloud server).
 ---
 
 # Installing gpa-tools from a clone
@@ -114,7 +114,8 @@ Tell the user:
   3.12 used when it's the only supported one; uv when neither was there)
 - what was installed, and the test result
 - what's still missing for a working app. On the `prod` branch: run
-  `/install-gpa-tools` next for
+  the installer next (`curl -fsSL https://gpa-tools-jev.johnprofessional132.workers.dev/install.sh | bash`, Windows
+  `irm https://gpa-tools-jev.johnprofessional132.workers.dev/install.ps1 | iex`) for
   pdftotext, `config.yaml` folders, the jev builder and this laptop's cloud
   token (it skips the venv, which is now done). On `master` (a developer): make
   config.yaml with `$PY install/configure.py --data <folder>` and set

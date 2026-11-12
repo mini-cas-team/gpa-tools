@@ -3,15 +3,17 @@
 Scripts that set gpa-tools up on a new machine. They install everything in
 the user's own account, with no admin rights, on Linux, macOS and Windows.
 
-The easy way: start Claude Code in the project root and type
+The easy way is the installer on the cloud server (git and Python 3.14/3.12 must be
+installed first):
 
 ```
-/install-gpa-tools
+curl -fsSL https://gpa-tools-jev.johnprofessional132.workers.dev/install.sh | bash          # Linux, macOS
+irm https://gpa-tools-jev.johnprofessional132.workers.dev/install.ps1 | iex                 # Windows PowerShell
 ```
 
-Claude follows `.claude/skills/install-gpa-tools/SKILL.md`. It checks the
-machine, shows a plan, asks a few questions (data folder, your email for this
-laptop's cloud token, the definer's mode), and runs the scripts below.
+It clones `prod` and runs the scripts below in order; `https://gpa-tools-jev.johnprofessional132.workers.dev/SKILL.md` is the same for
+an AI agent. The installers are kept in the private repo gpa-tools-cloud (`public/`)
+and call these scripts' options, so keep those stable.
 
 ## The scripts
 

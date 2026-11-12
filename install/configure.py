@@ -38,7 +38,7 @@ COMPONENTS = ("transcripts", "letters", "personal")
 TEMPLATE = """\
 # gpa-tools configuration for this machine.
 #
-# Made by install/configure.py (or /install-gpa-tools in Claude Code); edit freely.
+# Made by install/configure.py (or the gpa-tools installer); edit freely.
 # Not in git: each machine has its own (updates never touch it).
 
 # prod: a production laptop. Category definitions come only from the cloud server
