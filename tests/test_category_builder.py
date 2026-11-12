@@ -240,10 +240,19 @@ def test_definition_for_drafts_once(tmp_path, monkeypatch):
     monkeypatch.setitem(definer.PROVIDERS, "gemini", lambda c: gemini)
     config = tmp_path / "config.yaml"
     config.write_text("a: 1\n", encoding="utf-8")
-    cfg = {"log-folder": str(tmp_path / "log")}
+    cfg = {"log-folder": str(tmp_path / "log"), "run_mode": "dev"}
     assert definer.definition_for(config, cfg, "STEM") == ("STEM means science.", "drafted")
     assert definer.definition_for(config, cfg, "STEM") == ("STEM means science.", "repo")
     assert gemini.defined == ["STEM"]
+    # run_mode prod (the default): a category no one has is an error, never a draft
+    with pytest.raises(common.RunError, match="Ask the package owner"):
+        definer.definition_for(config, {"log-folder": str(tmp_path / "log")}, "LAW")
+    assert gemini.defined == ["STEM"]
+
+
+def test_run_mode_is_prod_unless_it_says_dev():
+    assert [category_builder.run_mode(c) for c in ({}, {"run_mode": "prod"}, {"run_mode": "Dev"},
+                                                   {"run_mode": "test"})] == ["prod", "prod", "dev", "prod"]
 
 
 def test_out_builder_copies_only_the_gpa_csv(tmp_path):

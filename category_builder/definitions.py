@@ -155,6 +155,16 @@ class Definitions:
             log.info("could not ask the cloud for %s's definition: %s", category, exc)
             return None
 
+    def cloud_definitions(self) -> dict[str, str]:
+        """Every shared definition on the cloud; {} without a cloud or when it can't be reached."""
+        if self.cloud is None:
+            return {}
+        try:
+            return self.cloud.definitions()
+        except (JevError, OSError) as exc:
+            log.info("could not list the cloud's definitions: %s", exc)
+            return {}
+
     def publish(self, category: str, definition: str) -> dict:
         """Offer this PC's ``definition`` of a new category to the cloud and save the
         result: the cloud's shared text (ours when we were first) as origin cloud, or ours

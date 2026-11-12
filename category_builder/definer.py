@@ -29,6 +29,8 @@ from pathlib import Path
 
 from category_definition_builder import Draft, DraftFailed, define
 
+from . import run_mode
+from .common import RunError
 from .definitions import Definitions
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -142,9 +144,15 @@ def definition_for(config_path: Path, cfg: dict, category: str) -> tuple[str, st
     """``category``'s definition from the local repo, else the cloud's shared one, else
     a new draft (offered to the cloud first; see definitions.py).
 
-    Returns (definition, how): how is "repo", "cloud" or "drafted".
+    Returns (definition, how): how is "repo", "cloud" or "drafted".  In run_mode prod
+    there is no draft: a category the cloud does not have is a RunError.
     """
-    return Definitions(config_path).resolve(category, lambda: draft(cfg, category).definition)
+    def new_draft() -> str:
+        if run_mode(cfg) != "dev":
+            raise RunError(f"No definition for {category} on the cloud server. Ask the package "
+                           f"owner to add it (drafting is for run_mode: dev).")
+        return draft(cfg, category).definition
+    return Definitions(config_path).resolve(category, new_draft)
 
 
 def describe_how(category: str, how: str, definition: str) -> str | None:

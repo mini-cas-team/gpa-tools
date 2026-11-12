@@ -299,8 +299,12 @@ def _letter_students(cfg: dict, names: dict[str, str]) -> tuple[list[dict], str 
 
 
 def _dev_mode(cfg: dict) -> bool:
-    """config.yaml's run_mode is dev: the UI also shows what is otherwise hidden."""
-    return str(cfg.get("run_mode") or "").strip().lower() == "dev"
+    """config.yaml's run_mode is dev: the UI also shows what is otherwise hidden
+    (category_builder.run_mode; anything but dev is prod)."""
+    return category_builder.run_mode(cfg) == "dev"
+
+
+NOT_ON_CLOUD = "{name} is not on the cloud server. Ask the package owner to add it."
 
 
 def _student_letters(transcript: str, cfg: dict) -> dict:
@@ -396,7 +400,7 @@ def create_app(config_path: Path | None = None) -> Flask:
     @app.get("/transcripts/ftp-upload")
     def upload():
         cfg = _load_config(config_path)
-        return render_template("upload.html", tab="ftp-upload",
+        return render_template("upload.html", tab="ftp-upload", dev=_dev_mode(cfg),
                                pdf_folder=folders.input_or_none(cfg, "transcripts") or "",
                                work_folder=folders.work_or_none(cfg, "transcripts") or "")
 
@@ -411,7 +415,8 @@ def create_app(config_path: Path | None = None) -> Flask:
     @app.get("/categories")
     def list_categories():
         """{name: definition} from the local definitions repo, with each one's origin
-        (cloud: the shared text; local: this PC's own).
+        (cloud: the shared text; local: this PC's own) and the run_mode.  In prod the
+        cloud's categories this PC doesn't have yet are saved into the repo first.
 
         ``names`` keeps the repo's order (jsonify sorts the object's keys).
         """
@@ -419,21 +424,29 @@ def create_app(config_path: Path | None = None) -> Flask:
             definitions = Definitions(config_path)
             data = definitions.data
             cfg = _load_config(config_path)
+            dev = _dev_mode(cfg)
             try:
-                steps = definer.step_names(definer.load_config(cfg))
+                steps = definer.step_names(definer.load_config(cfg)) if dev else []
             except ValueError:
                 steps = []  # a bad mode: the draft request reports it
+            if not dev:  # prod: the cloud's newer categories join the repo by themselves
+                for name, text in sorted(definitions.cloud_definitions().items()):
+                    if name not in data:
+                        definitions.set(name, text, origin="cloud")
+                        log.info("category %s taken from the cloud into %s", name, definitions.folder)
+                data = definitions.data
             return jsonify(categories=data, names=list(data), path=str(definitions.folder),
                            origins={c: definitions.origin(c) for c in data},
                            builders=category_builder.names(),
-                           active_builder=category_builder.active(cfg), definer=steps)
+                           active_builder=category_builder.active(cfg), definer=steps,
+                           mode="dev" if dev else "prod")
         except (OSError, yaml.YAMLError) as exc:
             return jsonify(error=f"could not read {config_path}: {exc}"), 500
 
     @app.post("/categories/draft")
     def draft_category():
         """A definition for a new category: the cloud's shared one when it has one
-        (source "cloud"), else category-definer's draft. Nothing is saved."""
+        (source "cloud"), else (run_mode dev only) category-definer's draft. Nothing is saved."""
         try:
             name = category_name(request.form.get("name"))
         except ValueError as exc:
@@ -445,6 +458,8 @@ def create_app(config_path: Path | None = None) -> Flask:
         if shared is not None:
             return jsonify(name=name, definition=shared, source="cloud", attempts=[])
         cfg = _load_config(config_path)
+        if not _dev_mode(cfg):
+            return jsonify(error=NOT_ON_CLOUD.format(name=name)), 404
         try:
             definer.load_config(cfg)
         except ValueError as exc:
@@ -465,6 +480,9 @@ def create_app(config_path: Path | None = None) -> Flask:
         A new name (offered to the cloud, whose shared text wins; ``shared`` says
         created, adopted or pending) unless ``replace=1`` (Update, an existing one:
         a local override unless it equals the cloud's text).
+
+        run_mode prod: no edits (403), and a new name is saved only as the cloud's
+        shared text; the posted definition is not used.
         """
         try:
             name = category_name(request.form.get("name"))
@@ -479,6 +497,17 @@ def create_app(config_path: Path | None = None) -> Flask:
             return jsonify(error=f"{name} is not defined"), 404
         if not replace and name in definitions.data:
             return jsonify(error=f"{name} is already defined"), 409
+        if not _dev_mode(_load_config(config_path)):
+            if replace:
+                return jsonify(error="editing definitions is for run_mode: dev; this PC uses "
+                                     "the cloud's shared ones"), 403
+            shared = definitions.cloud_definition(name)
+            if shared is None:
+                return jsonify(error=NOT_ON_CLOUD.format(name=name)), 404
+            entry = definitions.set(name, shared, origin="cloud")
+            log.info("category %s taken from the cloud into %s", name, definitions.folder)
+            return jsonify(name=name, categories=definitions.data, origin="cloud",
+                           shared="taken", definition=entry["definition"])
         try:
             entry = definitions.update(name, definition) if replace \
                 else definitions.publish(name, definition)

@@ -38,7 +38,7 @@ def folders(tmp_path):
     config.write_text(f"# my settings\ninput-folder: {tmp_path / 'in'}\nout-folder: {tmp_path / 'out'}\n"
                       f"work-folder: {tmp_path / 'work'}\nmin-category-courses: 3\n"
                       "category-definitions:\n  STEM: Science and maths.\n"
-                      "log-folder: /nowhere  # keep me\n")
+                      "log-folder: /nowhere  # keep me\nrun_mode: dev\n")
     return built, config
 
 
@@ -196,8 +196,11 @@ def test_courses_come_from_the_courses_csv(client, folders):
     assert client.get(data["pdf_url"]).data == b"%PDF-1.4 ann"
 
 
-def test_student_detail_lists_the_students_letters_with_post_ranks(client, tmp_path):
+def test_student_detail_lists_the_students_letters_with_post_ranks(client, tmp_path, folders):
     from letter_builder import rank_letters
+
+    config = folders[1]  # prod: Jev's own rank and confidence stay hidden
+    config.write_text(config.read_text().replace("run_mode: dev", "run_mode: prod"))
 
     letters, ranked = tmp_path / "in" / "letters", tmp_path / "work" / "letters"
     letters.mkdir(parents=True)
@@ -330,7 +333,8 @@ def test_categories_list_the_definitions_repo(client, folders):
     assert data == {"categories": {"STEM": "Science and maths."}, "names": ["STEM"],
                     "path": str(repo), "origins": {"STEM": "local"},
                     "builders": ["jev"], "active_builder": "jev",
-                    "definer": ["chatgpt (window)", "gemini (window)"]}
+                    "definer": ["chatgpt (window)", "gemini (window)"],
+                    "mode": "dev"}
     assert (repo / "STEM.json").exists()
     text = folders[1].read_text()
     assert "category-definitions" not in text and f"definitions-folder: {repo}" in text
@@ -402,6 +406,55 @@ def test_replace_needs_an_existing_category(client, folders):
 def test_bad_category_requests_never_reach_the_definer(client, fake_gemini, path, form, status):
     assert client.post(path, data=form).status_code == status
     assert fake_gemini.defined == []
+
+
+@pytest.fixture
+def prod(folders, monkeypatch):
+    """run_mode prod, with a cloud that shares STEM and LAW."""
+    from category_builder import definitions as defs_module
+    from test_category_builder import FakeCloud
+
+    config = folders[1]
+    config.write_text(config.read_text().replace("run_mode: dev", "run_mode: prod"))
+    cloud = FakeCloud({"STEM": "Science and maths.", "LAW": "Law and legal studies."})
+    monkeypatch.setattr(defs_module, "cloud_for", lambda raw: cloud)
+    return cloud
+
+
+def test_prod_takes_every_cloud_category_by_itself_and_never_drafts(client, prod, fake_gemini, folders):
+    data = client.get("/categories").get_json()  # the first visit downloads the cloud's ones
+    assert (data["mode"], data["definer"]) == ("prod", [])
+    assert set(data["names"]) == {"STEM", "LAW"}
+    prod.shared["MATH"] = "Mathematics."  # shared by the owner later: the next visit has it
+    data = client.get("/categories").get_json()
+    assert data["categories"]["MATH"] == "Mathematics." and data["origins"]["MATH"] == "cloud"
+    prod.shared["ART"] = "Art."  # even a direct save takes the cloud's text, not the posted one
+    r = client.post("/categories", data={"name": "ART", "definition": "My own words."}).get_json()
+    assert (r["definition"], r["origin"], r["shared"]) == ("Art.", "cloud", "taken")
+    del prod.shared["ART"]
+    # a new one: no draft, no typing
+    for path in ("/categories/draft", "/categories"):
+        r = client.post(path, data={"name": "DANCE", "definition": "Dance."})
+        assert r.status_code == 404 and "Ask the package owner" in r.get_json()["error"]
+    assert fake_gemini.defined == [] and prod.created == []
+    # no edits; going back to the cloud's text still works
+    r = client.post("/categories", data={"name": "STEM", "definition": "Edited.", "replace": "1"})
+    assert r.status_code == 403
+    assert client.get("/categories").get_json()["categories"]["STEM"] == "Science and maths."
+
+
+def test_prod_page_hides_the_developer_parts(client, prod):
+    body = client.get("/transcripts/ftp-upload").get_data(as_text=True)
+    assert '<label for="builder-select">' not in body and 'id="category-path"' not in body
+    assert "const DEV = false" in body and 'id="category-build" hidden>Build</button>' in body
+    assert ">Update</button>" not in body and ">Add</button>" not in body
+
+
+def test_dev_page_shows_everything(client):
+    body = client.get("/transcripts/ftp-upload").get_data(as_text=True)
+    assert '<label for="builder-select">' in body and 'id="category-path"' in body
+    assert "const DEV = true" in body and ">Update</button>" in body and ">Add</button>" in body
+    assert 'id="category-build"' not in body
 
 
 # --- runs -----------------------------------------------------------------------

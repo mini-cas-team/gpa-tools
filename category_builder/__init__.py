@@ -57,6 +57,19 @@ def active(cfg: dict) -> str:
     return name if name in BUILDERS else DEFAULT_BUILDER
 
 
+RUN_MODES = ("prod", "dev")
+
+
+def run_mode(cfg: dict) -> str:
+    """config.yaml's run_mode: "dev" only when it says dev; anything else is "prod".
+
+    prod  a production laptop: category definitions come only from the cloud server
+          (no drafting, no editing), and developer details stay hidden in the UI
+    dev   a developer's machine: everything, including drafting new categories
+    """
+    return "dev" if str(cfg.get("run_mode") or "").strip().lower() == "dev" else "prod"
+
+
 def settings(cfg: dict, name: str) -> dict:
     """That builder's own section: config.yaml's category-builder: <name>:."""
     return dict((cfg.get("category-builder") or {}).get(name) or {})

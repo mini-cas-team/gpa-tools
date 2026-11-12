@@ -113,9 +113,12 @@ Tell the user:
 - which Pythons were found, which one `.venv` uses and why (3.14 preferred;
   3.12 used when it's the only supported one; uv when neither was there)
 - what was installed, and the test result
-- what's still missing for a working app: run `/install-gpa-tools` next for
+- what's still missing for a working app. On the `prod` branch: run
+  `/install-gpa-tools` next for
   pdftotext, `config.yaml` folders, the jev builder and this laptop's cloud
-  token, and the definer's mode (it skips the venv, which is now done)
+  token (it skips the venv, which is now done). On `master` (a developer): make
+  config.yaml with `$PY install/configure.py --data <folder>` and set
+  `run_mode: dev` in it
 - the app starts with `$PY -m browser_view`, then http://127.0.0.1:5001
 
 ## Troubleshooting

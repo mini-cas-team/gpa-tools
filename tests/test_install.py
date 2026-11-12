@@ -71,7 +71,7 @@ def test_template_is_valid_yaml_with_every_key():
         "mode": "cloud", "cloud-url": "https://gpa-tools-jev.johnprofessional132.workers.dev", "cloud-token-env": "GPA_TOOLS_CLOUD_TOKEN",
         "model": "jev-1.14.0", "api-url": "https://api.typesafe.ai/v1/systemone",
         "api-key-env": "GPA_TOOLS_KEY", "threshold": 0.5, "batch-size": 20}
-    assert cfg["active-category-builder"] == "jev"
+    assert cfg["active-category-builder"] == "jev" and cfg["run_mode"] == "prod"
     assert cfg["category-definer"]["mode"] == "dev"
     assert cfg["category-definer"]["retries"] == 1
     assert cfg["category-definitions"] == {}

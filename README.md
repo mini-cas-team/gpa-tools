@@ -27,11 +27,33 @@ browser_view: the Upload tab drives all three; the View tab reads work/<builder>
 
 ## Getting started
 
+There are two branches:
+
+| | branch | for | settings |
+|---|---|---|---|
+| **Production** | `prod`: released versions only | everyone using gpa-tools | `run_mode: prod`: categories come only from the cloud server, no drafting or editing, developer details hidden |
+| **Development** | `master`: the latest code | the few developers | `run_mode: dev`: everything, including drafting new categories for the cloud |
+
+Production:
+
 ```bash
-git clone https://github.com/mini-cas-team/gpa-tools.git
+git clone --branch prod https://github.com/mini-cas-team/gpa-tools.git
 cd gpa-tools
 claude                     # then type:  /install-from-clone, then /install-gpa-tools
+git pull                   # later: update to the latest release; config.yaml is never touched
 ```
+
+Development:
+
+```bash
+git clone https://github.com/mini-cas-team/gpa-tools.git        # master
+cd gpa-tools
+claude                     # then type:  /install-from-clone
+.venv/bin/python install/configure.py --data ~/gpa-tools-data   # then set run_mode: dev in config.yaml
+```
+
+A release moves `prod` forward to a tested `master`:
+`git switch prod && git merge --ff-only master && git push`.
 
 `/install-from-clone` installs the code: it finds the Pythons on the machine,
 builds `.venv` with the best supported one (3.14, else 3.12, else uv fetches
@@ -39,8 +61,8 @@ builds `.venv` with the best supported one (3.14, else 3.12, else uv fetches
 `python3 install/setup_venv.py --dry-run` shows the plan, and without
 `--dry-run` it does it.
 
-The `/install-gpa-tools` skill does the rest in your own user account, with no
-admin rights, on Linux, macOS or Windows:
+The `/install-gpa-tools` skill does a production install, in your own user account
+and with no admin rights, on Linux, macOS or Windows:
 - the venv (Python 3.14 or 3.12) and packages (Playwright among them; it drives the installed Chrome or Edge)
 - pdftotext (into `.tools/`, if it's missing)
 - `config.yaml`: folders, the cloud server, the definer's mode, set by `install/configure.py`
@@ -50,7 +72,8 @@ No local model, no GPU and no multi-GB downloads: the heavy work is Jev's, in th
 
 It checks what is already installed first and asks before downloading. See
 [install/README.md](install/README.md) for the scripts it uses, which also
-work by hand. `config.yaml` is tracked in git.
+work by hand. `config.yaml` is this machine's own and not in git, so updating
+with `git pull` never touches it.
 
 gpa-tools runs on **Python 3.14 or 3.12** (3.14 preferred; 3.13 and 3.11 are not
 supported). `tests/test_python_versions.py` keeps the code 3.12-safe while you
@@ -244,7 +267,7 @@ two ways (`mode`):
   names, e.g. `export GPA_TOOLS_KEY=...` in `~/.bashrc`. `model` and
   `api-url` apply only here.
 
-Neither the key nor the token ever goes in config.yaml, which is in git.
+Neither the key nor the token ever goes in config.yaml.
 `python -m jev_category.seed --category STEM [--definition]` uploads this
 machine's scores (and, with `--definition`, the definition) to the cloud's
 shared store; it needs the server's admin token in `GPA_TOOLS_CLOUD_ADMIN_TOKEN`.
@@ -693,6 +716,21 @@ attempt log, reply parsing, publishing, every browser_view route, and the
 installer's config editing.
 
 ## Changes
+
+### 2026-11-13: production and development
+
+- **New branches.** `prod` holds the released versions and is what laptops
+  install. `master` is development.
+- **New setting, `run_mode`.** In `prod`, the default:
+  - definitions come only from the cloud server; drafting and editing are refused;
+  - the Upload tab hides the builder choice and the repo path;
+  - Update becomes Build, which runs a build without editing.
+  `dev` shows and allows everything.
+- **config.yaml left git.** It is each machine's own, made by `install/configure.py`.
+  It was removed from git, so on an older clone `git pull` deletes the tracked
+  copy, or stops if you edited it. Copy your config.yaml aside first, and put it
+  back after the pull.
+- **`/install-gpa-tools` installs production only**, and checks it is on `prod`.
 
 ### 2026-11-12: Ollama removed
 

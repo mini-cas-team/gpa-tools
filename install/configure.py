@@ -39,6 +39,13 @@ TEMPLATE = """\
 # gpa-tools configuration for this machine.
 #
 # Made by install/configure.py (or /install-gpa-tools in Claude Code); edit freely.
+# Not in git: each machine has its own (updates never touch it).
+
+# prod: a production laptop. Category definitions come only from the cloud server
+#       (no drafting, no editing) and developer details stay hidden.
+# dev:  a developer's machine: everything, including drafting new categories and
+#       Jev's own letter rank in the student dialog.
+run_mode: prod
 
 # --- folders ------------------------------------------------------------------
 # Every component has a folder of raw input, <input-folder>/<component>/, and a

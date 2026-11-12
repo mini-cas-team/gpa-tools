@@ -37,12 +37,18 @@
 <fieldset>
   <legend>Category definitions</legend>
   <div class="category-bar">
-    <label for="builder-select">Builder</label>
+    {% if dev %}<label for="builder-select">Builder</label>
     <select id="builder-select" class="builder"></select>
-    <label for="category-select">Category</label>
+    {% else %}<select id="builder-select" class="builder" hidden></select>{# run_mode prod: jev only #}
+    {% endif %}<label for="category-select">Category</label>
     <select id="category-select" hidden></select>
-    <button type="button" id="category-update" class="secondary toggle" aria-pressed="false" hidden>Update</button>
+    {% if dev %}<button type="button" id="category-update" class="secondary toggle" aria-pressed="false" hidden>Update</button>
     <button type="button" id="category-add" class="secondary toggle" aria-pressed="false">Add</button>
+    {% else %}{# run_mode prod: no Update or Add; Build runs the selected category at once #}
+    <button type="button" id="category-build" hidden>Build</button>
+    <button type="button" id="category-update" hidden></button>
+    <button type="button" id="category-add" hidden></button>
+    {% endif %}
   </div>
 
   <!-- Under the bar: one of view / update / add, then progress while busy. -->
@@ -79,10 +85,15 @@
     <p class="hint" id="category-progress-text"></p>
   </div>
 
-  <p class="hint">Definitions live in <code id="category-path"></code>, one
+  {% if dev %}<p class="hint">Definitions live in <code id="category-path"></code>, one
     <code>&lt;CAT&gt;.json</code> each (<code>definitions-folder</code> in config.yaml). A new
     category is taken from the cloud when it has one; otherwise category-definer drafts it and
     the draft becomes the shared one.</p>
+  {% else %}<p class="hint">Categories come from the cloud server, and new ones appear here by
+    themselves. Build runs the selected category for every student in
+    <code>&lt;work-folder&gt;/transcripts</code> and publishes the result to out-folder. For a new
+    category, ask the package owner.</p>
+  {% endif %}
 </fieldset>
 <div id="category-status" class="status" role="status" aria-live="polite" hidden></div>
 </section>
@@ -171,10 +182,14 @@
 })();
 
 
+// run_mode (config.yaml): prod takes definitions only from the cloud and builds; dev also drafts and edits.
+const DEV = {{ "true" if dev else "false" }};
+
 (() => {
   const $ = (id) => document.getElementById(id);
   const builderSelect = $("builder-select");
   const select = $("category-select"), updateButton = $("category-update"), addButton = $("category-add");
+  const buildButton = $("category-build");  // run_mode prod only
   const definitionBox = $("category-definition");
   const updateForm = $("category-update-form"), text = $("category-text");
   const addForm = $("category-add-form"), nameInput = $("category-name");
@@ -239,6 +254,7 @@
     // While Update or Add is active, the other button and the dropdown are off;
     // the active button stays usable (to close it) unless a draft or run is going.
     updateButton.disabled = busy || action === "add";
+    if (buildButton) buildButton.disabled = busy;
     addButton.disabled = busy || action === "update";
     select.disabled = builderSelect.disabled = busy || action !== null;
     progressBox.hidden = !busy;
@@ -257,13 +273,14 @@
 
   function render(selected) {
     const empty = !names.length;
-    select.hidden = updateButton.hidden = empty;
+    select.hidden = empty;
+    if (DEV) updateButton.hidden = empty; else buildButton.hidden = empty;
     select.replaceChildren(...names.map((name) => new Option(name, name)));
     // The first category unless one is asked for.
     if (selected && names.includes(selected)) select.value = selected;
-    definitionBox.textContent = empty
-      ? "No categories yet. Use Add to take one from the cloud or have category-definer draft one."
-      : categories[select.value];
+    definitionBox.textContent = !empty ? categories[select.value]
+      : DEV ? "No categories yet. Use Add to take one from the cloud or have category-definer draft one."
+      : "No categories yet: the cloud server could not be reached, or has none. Reload to try again.";
     const origin = empty ? null : origins[select.value];
     $("category-origin").hidden = !origin;
     $("category-origin-text").textContent = origin === "cloud"
@@ -278,12 +295,12 @@
     origins = data.origins || {};
     names = data.names || Object.keys(categories);
     definerSteps = data.definer || [];
-    $("category-path").textContent = data.path;
+    if ($("category-path")) $("category-path").textContent = data.path;
     if (!builderSelect.options.length) {  // kept across reloads: the user's pick wins
       builderSelect.replaceChildren(...(data.builders || []).map((b) => new Option(b, b)));
       builderSelect.value = data.active_builder;
     }
-    // The Name box suggests the defined names (none when the section is empty).
+    // The Name box (dev) suggests the defined names.
     $("category-suggestions").replaceChildren(...names.map((name) => new Option(name)));
     render(selected);
   }
@@ -314,9 +331,9 @@
     setMode("busy");
     const started = Date.now();
     const steps = definerSteps.join(", then ") || "category-definer";
-    const tick = () => progress(
-      `Asking ${steps} to define ${name} (a Chrome window may open)… ` +
-      `${minutes((Date.now() - started) / 1000)}`);
+    const tick = () => progress((DEV
+      ? `Asking ${steps} to define ${name} (a Chrome window may open)… `
+      : `Looking up ${name} on the cloud server… `) + `${minutes((Date.now() - started) / 1000)}`);
     tick();
     const timer = setInterval(tick, 1000);
     try {
@@ -324,7 +341,7 @@
       const saved = await call("/categories", post({ name: draft.name, definition: draft.definition }));
       await load(draft.name);
       const failed = draft.attempts.filter((a) => a.error !== null);
-      const how = draft.source === "cloud" ? "taken from the cloud (the shared definition)"
+      const how = (draft.source === "cloud" || saved.shared === "taken") ? "taken from the cloud (the shared definition)"
         : saved.shared === "created" ? `drafted by ${draft.source} and shared with the cloud`
         : saved.shared === "adopted" ? `drafted by ${draft.source}, but another client shared one first; using theirs`
         : `drafted by ${draft.source}; the cloud could not be reached, so it is shared later`;
@@ -341,7 +358,16 @@
     }
   });
 
-  // ---- Update -> Go: save the edit, run the selected builder ---------------
+  // ---- a build: run the selected builder on a saved category --------------
+  async function startBuild(name, builder) {
+    setMode("busy");
+    progress(`Starting ${name}…`);
+    const est = await call(`/runs/estimate?${new URLSearchParams({ category: name, builder })}`);
+    showProgress(await call("/runs", post({ category: name, builder })), est);
+    watch(est);
+  }
+
+  // ---- Update -> Go (dev): save the edit, then build ------------------------
   updateForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const name = select.value, definition = text.value.trim(), builder = builderSelect.value;
@@ -351,14 +377,21 @@
         await call("/categories", post({ name, definition, replace: "1" }));
         await load(name);
       }
-      setMode("busy");
-      progress(`Starting ${name}…`);
-      const est = await call(`/runs/estimate?${new URLSearchParams({ category: name, builder })}`);
-      showProgress(await call("/runs", post({ category: name, builder })), est);
-      watch(est);
+      await startBuild(name, builder);
     } catch (err) {
       showStatus("error", `Error: ${err.message}`);
       setMode("update");  // keep the text so Go can be tried again
+    }
+  });
+
+  // ---- Build (prod): build the selected category as it is ------------------
+  buildButton?.addEventListener("click", async () => {
+    showStatus(null);
+    try {
+      await startBuild(select.value, builderSelect.value);
+    } catch (err) {
+      showStatus("error", `Error: ${err.message}`);
+      setMode("view");
     }
   });
 

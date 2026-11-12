@@ -1,17 +1,20 @@
 ---
 name: install-gpa-tools
-description: Install gpa-tools on this machine and get it running - Python venv and packages, pdftotext, config.yaml (folders, the cloud server, definer mode), the jev builder through the gpa-tools cloud server (this laptop asks for its own client token with the user's email, the package owner approves it; direct TypeSafe with an API key for development only), and the category-definer (dev: ChatGPT, then Gemini in browser windows; prod: Gemini headless). No local LLM, no GPU, no model downloads. Use when the user asks to install, set up or repair gpa-tools or its dependencies, to add or fix the jev builder or this laptop's cloud token, when config.yaml is missing, or when the cloud server is not reachable.
+description: Install the production version of gpa-tools (the prod branch, run_mode prod) on this machine and get it running - Python venv and packages, pdftotext, config.yaml (folders, the cloud server), and the jev builder through the gpa-tools cloud server (this laptop asks for its own client token with the user's email, the package owner approves it). Category definitions come only from the cloud. No local LLM, no GPU, no model downloads. Developers clone master instead and set run_mode dev by hand. Use when the user asks to install, set up or repair gpa-tools or its dependencies, to add or fix the jev builder or this laptop's cloud token, when config.yaml is missing, or when the cloud server is not reachable.
 ---
 
 # Installing gpa-tools
 
-The user has cloned the repo and started Claude Code in its root. Get them to a
-working `python -m browser_view`. The scripts in `install/` do the work and
-report in plain text or JSON; this file says in what order and what to ask.
+The user has cloned the repo's **`prod` branch** and started Claude Code in its
+root. Get them to a working `python -m browser_view`. The scripts in `install/`
+do the work and report in plain text or JSON; this file says in what order and
+what to ask.
 
-gpa-tools has no local model: course scoring (Jev) runs in the gpa-tools cloud
-server, and definitions come from the cloud or the free ChatGPT/Gemini web
-chats. The install is light: a venv, pdftotext, config.yaml and a token.
+This skill installs **production only** (`run_mode: prod`): course scoring (Jev)
+runs in the gpa-tools cloud server, and category definitions come only from the
+cloud (no drafting, no editing). The install is light: a venv, pdftotext,
+config.yaml and a token. Developers don't use this skill: they clone `master`,
+run `/install-from-clone`, and set `run_mode: dev` in config.yaml themselves.
 
 ## Rules
 
@@ -45,13 +48,28 @@ On Windows, `python` can be the Microsoft Store stub, which runs nothing.
 
 ## Step 0 — check
 
+First the branch:
+
+```bash
+git branch --show-current       # should be: prod
+```
+
+- `prod`: go on.
+- anything else (`master`, a feature branch): this checkout is development code.
+  Tell the user this skill installs production, and that production laptops clone
+  `git clone --branch prod https://github.com/mini-cas-team/gpa-tools.git`.
+  **Ask** whether to continue anyway (a developer trying the production setup);
+  stop if they say no.
+
+Then the machine:
+
 ```bash
 python3 install/check.py --text      # summary for you and the user
 python3 install/check.py             # JSON, when you need a detail
 ```
 
 It reports the OS, RAM, free disk, Python and venv, pdftotext, Chrome and Edge,
-the config.yaml folders, the definer's mode, and the jev builder. In cloud mode
+the config.yaml folders, and the jev builder. In cloud mode
 it shows the cloud-url, where this laptop's token comes from
 (`~/.gpa-tools/client_token`, a request waiting for approval, or none), and
 whether the server accepts it. In direct mode it shows whether the key variable
@@ -127,8 +145,8 @@ Without a config.yaml, this creates one from the template built into
 `configure.py`, already in cloud mode with the deployed `cloud-url` and jev as
 the active builder. If one already exists with folders that exist (check.py says
 so), **Ask** before changing them. `configure.py` only rewrites the keys it's
-given and creates the folders. config.yaml is tracked in git, so mention that
-the change shows up in `git status`.
+given and creates the folders. config.yaml is this machine's own and not in
+git, so `git pull` updates never touch it.
 
 ## Step 4 — the jev builder: this laptop's cloud token
 
@@ -194,40 +212,16 @@ mode.
    (one question, ~$0.00002). Use a versioned model; plain `jev` is not a model name.
 4. `$PY install/configure.py --jev-mode direct --jev-model jev-1.14.0`
 
-## Step 5 — the category-definer
+## Step 5 — a browser for Rank's Ask AI (optional)
 
-Most categories never need it: the cloud server shares every category's
-definition, and a new laptop downloads them on first use. When a category is new
-everywhere, the definer drafts a definition for the user to edit. Its `mode`
-picks the steps, with one retry for each site:
+View → Rank's Ask AI box turns a request in plain words into filters through the
+free ChatGPT/Gemini web chats, which Playwright drives in the installed Chrome or
+Edge. Nothing else in production needs a browser.
 
-- **dev** (the default): ChatGPT → Gemini. Each site opens a visible browser
-  window for about a minute, so it needs a desktop session.
-- **prod**: Gemini headless (no window). Use this on a server or any machine
-  without a desktop. ChatGPT isn't in prod because it blocks headless browsers.
-
-When every step fails, the user types the definition in the Upload tab's Add box.
-
-The sites are used through their free web chats, with no account and no key.
-`category_definition_builder` has Playwright (from requirements.txt) drive the
-installed Chrome, else Edge, else Playwright's own Chromium. No extension is
-needed.
-
-**Ask** which mode fits this machine. Then set it:
-```bash
-$PY install/configure.py --definer-mode prod    # dev is already the default
-```
-
-- If check.py shows neither `chrome` nor `msedge`, **Ask** before
-  downloading Playwright's Chromium (about 150 MB, no admin needed):
-  `$PY -m playwright install chromium`. Without any browser, drafting always
-  fails and the user types new definitions.
-- **Ask** before a test draft. It sends "define STEM" to the site, and in
-  dev it opens a window. Nothing is saved:
-  ```bash
-  $PY -m category_definition_builder STEM --only gemini
-  ```
-  If a site fails, say so and go on: the other site, or typing, still works.
+- check.py shows `chrome` or `msedge`: nothing to do.
+- Neither: **Ask** before downloading Playwright's Chromium (about 150 MB, no admin
+  needed): `$PY -m playwright install chromium`. Without a browser, Ask AI fails
+  and the manual filters still work.
 
 ## Step 6 — verify and hand over
 
@@ -245,13 +239,14 @@ Then tell the user:
   yet; until then, the package owner must approve it
   (`jev_category.admin approve <id>`). The token is in
   `~/.gpa-tools/client_token`, so the app can start from any shell or launcher
-- the definer's mode (dev: chatgpt → gemini in windows; prod: gemini headless),
-  that each try is logged to `<log-folder>/category_definer.log`, and that a
-  failed draft means typing the definition
+- that this is the production setup (`run_mode: prod`): categories come from the
+  cloud server; for a new one, ask the package owner
+- how to update later: `git pull` (on `prod`), then restart the app; config.yaml
+  is this machine's own and is never touched by an update
 - how to start the app: `$PY -m browser_view`, then open http://127.0.0.1:5001
   (in VS Code, the "browser-view: web UI" launch entry)
-- the first category: on the Upload tab, Add, then a name such as STEM. A
-  category the cloud already has comes with its shared definition.
+- the categories: the cloud's are downloaded on the first start; Upload tab →
+  pick one → Build → Go. Add lists the cloud's newer ones.
 
 ## Removing it again
 
@@ -280,7 +275,7 @@ Then tell the user:
 | `Unknown model: …` (direct) | Not a TypeSafe model name: `jev_check.py probe` lists aliases; versioned IDs like `jev-1.14.0` work too. |
 | `out of funds` (direct) | The TypeSafe balance is $0.00; the user adds funds in the console. |
 | `unknown category builder 'llm'` / OUTDATED `category-builder: llm` | config.yaml is from before Ollama was removed: `$PY install/configure.py --active-builder jev`, and delete the llm section by hand. |
-| `no usable browser: chrome, msedge, playwright chromium not installed` | No Chrome or Edge where Playwright looks. Run `$PY -m playwright install chromium`, or leave it: the user types new definitions. |
-| `Missing X server or $DISPLAY` (dev mode) | No desktop session (SSH, a server). Use `--definer-mode prod`. |
-| `no DEFINITION: in the reply`, or timeouts for one site every time | The site changed its page layout or wording. The chain falls back to the next step, then to typing. Fixing it means updating the selectors in `category_definition_builder/browser_legs.py`. |
+| `X is not on the cloud server. Ask the package owner to add it.` | Production laptops take categories only from the cloud. The owner adds it on a developer machine (`run_mode: dev`), then it appears under Add. |
+| `editing definitions is for run_mode: dev` | Production laptops use the cloud's shared text as is, so every laptop shares the same scores. |
+| `no usable browser: chrome, msedge, playwright chromium not installed` (Ask AI) | No Chrome or Edge where Playwright looks. Run `$PY -m playwright install chromium`, or leave it: Rank's manual filters still work. |
 | `playwright` in check.py's `missing` | Re-run `$PY -m pip install -r requirements.txt`. |

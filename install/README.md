@@ -62,7 +62,7 @@ desktop, use `configure.py --definer-mode prod`.
 | poppler | `.tools/` in the project (git-ignored), listed under `tool-folders:` in config.yaml |
 | this laptop's cloud token | `~/.gpa-tools/` (`client_token`, or `pending_token` until approved) |
 | TypeSafe API key (direct mode, development only) | an environment variable (`GPA_TOOLS_KEY`) in the user's shell profile; config.yaml only names it |
-| config | `config.yaml` in the project (tracked in git; `configure.py` holds the template for a fresh one) |
+| config | `config.yaml` in the project (this machine's own, not in git; `configure.py` holds the template for a fresh one) |
 
 Only Linux has been tested end to end. The macOS and Windows steps follow
 micromamba's documented per-user install, but haven't been run.
