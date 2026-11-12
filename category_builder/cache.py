@@ -1,4 +1,4 @@
-"""The llm builder's per-course answer cache."""
+"""A builder's per-course answer cache (<work>/<builder>/cache_<cat>.json)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 class AnswerCache:
-    """Cached yes/no answers for one category, keyed by "code|title".
+    """Cached answers for one category, keyed by "code|title".
 
     Tied to the definition text and model: if either changes, old answers are
     discarded because they were given to a different question.
@@ -17,8 +17,8 @@ class AnswerCache:
     def __init__(self, path: Path, definition: str, model: str):
         self.path = path
         self.stamp = hashlib.sha256(f"{model}\n{definition}".encode()).hexdigest()[:16]
-        self.answers: dict[str, bool] = {}
-        # Seconds spent per LLM answer, for the Upload tab's time estimate.
+        self.answers: dict = {}
+        # Seconds spent per answer, for the Upload tab's time estimate.
         self.timing = {"count": 0, "seconds": 0.0}
         self.reset = False
         if path.exists():
@@ -33,15 +33,15 @@ class AnswerCache:
     def key(code: str, title: str) -> str:
         return f"{code.strip().upper()}|{title.strip().lower()}"
 
-    def get(self, code: str, title: str) -> bool | None:
+    def get(self, code: str, title: str):
         return self.answers.get(self.key(code, title))
 
-    def put(self, code: str, title: str, answer: bool, seconds: float | None = None) -> None:
+    def put(self, code: str, title: str, answer, seconds: float | None = None) -> None:
         self.answers[self.key(code, title)] = answer
         if seconds is not None:
             self.timing["count"] += 1
             self.timing["seconds"] += seconds
-        self.save()  # every answer is ~10 s of LLM time; don't lose it on Ctrl-C
+        self.save()
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

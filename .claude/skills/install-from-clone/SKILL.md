@@ -1,6 +1,6 @@
 ---
 name: install-from-clone
-description: Install gpa-tools' Python code from a fresh GitHub clone - find which Pythons the machine has, build the project's .venv with the best supported one (3.14, else 3.12; else uv fetches 3.14 for this user), install requirements.txt and pytest, and prove it with the test suite. Use when the user has just cloned the repo (https://github.com/johnprofessional132/gpa-tools) and asks to install it, set up the venv or Python, or check which Python the project can use, or when .venv is missing, broken, or built with an unsupported Python. For the rest of the machine (pdftotext, Ollama and its models, config.yaml, the jev builder, the definer) hand over to /install-gpa-tools.
+description: Install gpa-tools' Python code from a fresh GitHub clone - find which Pythons the machine has, build the project's .venv with the best supported one (3.14, else 3.12; else uv fetches 3.14 for this user), install requirements.txt and pytest, and prove it with the test suite. Use when the user has just cloned the repo (https://github.com/mini-cas-team/gpa-tools) and asks to install it, set up the venv or Python, or check which Python the project can use, or when .venv is missing, broken, or built with an unsupported Python. For the rest of the machine (pdftotext, config.yaml, the jev builder and this laptop's cloud token, the definer) hand over to /install-gpa-tools.
 ---
 
 # Installing gpa-tools from a clone
@@ -34,7 +34,7 @@ The working folder must hold `requirements.txt`, `install/setup_venv.py` and
 `browser_view/`. If it doesn't, tell the user to clone and start here:
 
 ```bash
-git clone https://github.com/johnprofessional132/gpa-tools.git
+git clone https://github.com/mini-cas-team/gpa-tools.git
 cd gpa-tools
 claude
 ```
@@ -101,7 +101,7 @@ Python: `~/.local/bin/uv run --python 3.14 install/setup_venv.py --dry-run`.
 `$PY` is `.venv/bin/python`, or `.venv/Scripts/python.exe` on Windows.
 
 ```bash
-$PY -m pytest tests -q        # needs no Ollama, pdftotext, browser or API key
+$PY -m pytest tests -q        # needs no pdftotext, browser, API key or cloud server
 ```
 
 All must pass. A failure only on 3.12 (or only on 3.14) is a compatibility bug
@@ -114,8 +114,8 @@ Tell the user:
   3.12 used when it's the only supported one; uv when neither was there)
 - what was installed, and the test result
 - what's still missing for a working app: run `/install-gpa-tools` next for
-  pdftotext, Ollama and its models, `config.yaml` folders, the optional jev
-  builder and the definer's mode (it skips the venv, which is now done)
+  pdftotext, `config.yaml` folders, the jev builder and this laptop's cloud
+  token, and the definer's mode (it skips the venv, which is now done)
 - the app starts with `$PY -m browser_view`, then http://127.0.0.1:5001
 
 ## Troubleshooting

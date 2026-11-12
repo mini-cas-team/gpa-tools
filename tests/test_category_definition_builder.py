@@ -135,10 +135,10 @@ def test_define_stops_at_the_first_definition_and_records_each_try():
     seen = []
     draft = define("STEM", [("chatgpt", 2, step("chatgpt", OSError("down"))),
                             ("gemini", 2, step("gemini", "  ")),  # blank counts as a failure
-                            ("ollama", 1, step("ollama", " Def. ")),
+                            ("third", 1, step("third", " Def. ")),
                             ("never", 1, step("never", "x"))], on_attempt=seen.append)
-    assert (draft.definition, draft.source) == ("Def.", "ollama")
-    assert tried == ["chatgpt", "chatgpt", "gemini", "gemini", "ollama"]
+    assert (draft.definition, draft.source) == ("Def.", "third")
+    assert tried == ["chatgpt", "chatgpt", "gemini", "gemini", "third"]
     assert [a.error for a in draft.failures] == ["OSError: down", "OSError: down",
                                                  "ValueError: empty definition",
                                                  "ValueError: empty definition"]

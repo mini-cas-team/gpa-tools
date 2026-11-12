@@ -7,8 +7,8 @@ into its own folder, ``<work-folder>/<name>/`` (see ``common.write_outputs``):
     <cat>_gpa.csv       one row per student: category GPA and course counts
     <cat>_courses.csv   one row per course, with its in-category flag
 
-It may keep any working files of its own there too (llm and jev keep their
-answer caches).  Builders provide data only: ranking is done by whoever reads the
+It may keep any working files of its own there too (jev keeps its score
+cache, category_builder.cache).  Builders provide data only: ranking is done by whoever reads the
 CSV (the View tab sorts its columns).  out_builder publishes ``<cat>_gpa.csv``
 to out-folder.
 
@@ -32,10 +32,9 @@ import folders
 
 # name -> module implementing the builder functions above
 BUILDERS = {
-    "llm": "llm_category.builder",
     "jev": "jev_category.builder",
 }
-DEFAULT_BUILDER = "llm"
+DEFAULT_BUILDER = "jev"
 
 
 class UnknownBuilder(ValueError):
@@ -53,7 +52,7 @@ def get(name: str) -> ModuleType:
 
 
 def active(cfg: dict) -> str:
-    """config.yaml's active-category-builder, else llm."""
+    """config.yaml's active-category-builder, else jev (also for an older config's llm)."""
     name = cfg.get("active-category-builder") or DEFAULT_BUILDER
     return name if name in BUILDERS else DEFAULT_BUILDER
 
@@ -61,31 +60,6 @@ def active(cfg: dict) -> str:
 def settings(cfg: dict, name: str) -> dict:
     """That builder's own section: config.yaml's category-builder: <name>:."""
     return dict((cfg.get("category-builder") or {}).get(name) or {})
-
-
-DEFAULT_MODEL = "qwen2.5:3b"
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
-
-
-def llm_models(cfg: dict) -> dict:
-    """The two Ollama models in category-builder: llm: and its ollama-url.
-
-        category-build-model       the llm builder's yes/no answers
-        category-definition-model  category-definer's ollama step
-
-    Older config.yaml keys still count when the new ones are missing: llm's
-    ``model`` (both), and category-definer's ``model`` and ``ollama-url``.
-    """
-    llm = settings(cfg, "llm")
-    definer = cfg.get("category-definer") if isinstance(cfg.get("category-definer"), dict) else {}
-    old = llm.get("model")
-    return {
-        "category-build-model": llm.get("category-build-model") or old or DEFAULT_MODEL,
-        "category-definition-model": (llm.get("category-definition-model") or definer.get("model")
-                                      or old or DEFAULT_MODEL),
-        "ollama-url": llm.get("ollama-url") or DEFAULT_OLLAMA_URL,
-        "definer-ollama-url": definer.get("ollama-url") or llm.get("ollama-url") or DEFAULT_OLLAMA_URL,
-    }
 
 
 def work_folder(cfg: dict) -> Path:

@@ -13,7 +13,7 @@ from typing import Callable, Iterable
 
 @dataclass
 class Attempt:
-    step: str  # "chatgpt", "gemini", "ollama"
+    step: str  # "chatgpt", "gemini"
     attempt: int  # 1-based, per step
     seconds: float
     error: str | None = None  # None: this try gave the definition
@@ -38,8 +38,8 @@ class Draft:
 
 
 class DraftFailed(OSError):
-    """Every step failed. An OSError, so callers that already handle an
-    unreachable Ollama report it the same way."""
+    """Every step failed. An OSError, so callers report it like any other
+    unreachable service."""
 
     def __init__(self, category: str, attempts: list[Attempt]):
         self.attempts = attempts

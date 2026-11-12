@@ -1,8 +1,6 @@
 """The LLMs rank_ai can ask. Each provider is a class with ask(prompt) -> the
 reply text; what the reply means is answer.py's job, the same for all of them.
 
-    ollama    the local model (default category-builder: llm: category-definition-model),
-              its output held to answer.SCHEMA
     gemini    gemini.google.com's free chat, anonymously, in the installed Chrome/Edge
     chatgpt   chatgpt.com's free chat, the same way (a visible window only)
     claude    the Anthropic Messages API; the key is in the environment variable
@@ -19,8 +17,6 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from . import answer
-
 DEFAULT_CLAUDE_MODEL = "claude-sonnet-5-5"
 CLAUDE_URL = "https://api.anthropic.com/v1/messages"
 # The browser steps: ChatGPT stops a headless browser at its bot check.
@@ -36,18 +32,6 @@ def _post(url: str, body: dict, headers: dict, timeout: float) -> dict:
     except urllib.error.HTTPError as exc:  # the body says why (bad model, bad key, ...)
         detail = exc.read().decode("utf-8", "replace")[:300]
         raise OSError(f"{url}: HTTP {exc.code}: {detail}") from exc
-
-
-class Ollama:
-    def __init__(self, cfg: dict):
-        self.url, self.model = cfg["ollama-url"].rstrip("/"), cfg["model"]
-        self.timeout, self.num_ctx = cfg["timeout"], cfg["num-ctx"]
-
-    def ask(self, prompt: str) -> str:
-        body = {"model": self.model, "prompt": prompt, "stream": False, "format": answer.SCHEMA,
-                # the prompt lists every known value, longer than Ollama's default context
-                "options": {"temperature": 0, "num_ctx": self.num_ctx}, "keep_alive": "30m"}
-        return _post(f"{self.url}/api/generate", body, {}, self.timeout)["response"]
 
 
 class Browser:
@@ -80,7 +64,6 @@ class Claude:
 
 # name -> provider factory (rank_ai's merged config) -> an object with ask(prompt)
 PROVIDERS = {
-    "ollama": Ollama,
     "gemini": lambda cfg: Browser(cfg, "gemini"),
     "chatgpt": lambda cfg: Browser(cfg, "chatgpt"),
     "claude": Claude,

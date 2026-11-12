@@ -1,18 +1,14 @@
 """Create or update config.yaml for this machine.
 
-    .venv/bin/python install/configure.py --data ~/gpa-tools-data \\
-        --model qwen2.5:3b --ollama-url http://localhost:11434
+    .venv/bin/python install/configure.py --data ~/gpa-tools-data
 
---model sets both Ollama models in category-builder: llm:,
-category-build-model (the llm builder's answers) and category-definition-model
-(category-definer's ollama step); --definer-model then gives the definer its
-own. --ollama-url is where both run.
+--jev-mode and --cloud-url point the jev builder at the gpa-tools cloud server
+(the default) or, for development, TypeSafe itself (direct).
 --jev-model and --jev-key-env set the jev builder (TypeSafe); the key itself
 never goes in config.yaml, only the name of the variable holding it.
 --active-builder picks the builder the Upload and View tabs start with.
---definer-mode picks category-definer's steps: dev (chatgpt -> gemini ->
-ollama in visible browser windows; needs a desktop) or prod (gemini headless
--> ollama).
+--definer-mode picks category-definer's steps: dev (chatgpt -> gemini in
+visible browser windows; needs a desktop) or prod (gemini headless).
 
 Without config.yaml, it is created from TEMPLATE below. Only the keys
 given on the command line change; every other line, comments included, is
@@ -54,7 +50,7 @@ components: [transcripts, letters, personal]
 input-folder: ~/gpa-tools-data # raw input, never written by a run
 work-folder: ~/gpa-tools-data/work # made from the input; builders keep their files in <work-folder>/<builder>/
 out-folder: ~/gpa-tools-data/out # published <cat>_gpa.csv, for other applications
-log-folder: ~/gpa-tools-data/log # upload.log, llm_category.log, jev_category.log, browser_view.log
+log-folder: ~/gpa-tools-data/log # upload.log, jev_category.log, category_definer.log, browser_view.log
 
 # --- View tab -------------------------------------------------------------------
 min-category-courses: 4 # hide students with fewer category courses
@@ -65,16 +61,12 @@ min-category-courses: 4 # hide students with fewer category courses
 # tool-folders: []
 
 # --- category builders --------------------------------------------------------
-# python -m category_builder --category STEM [--builder llm] [--publish]
+# python -m category_builder --category STEM [--builder jev] [--publish]
 # Each reads the *.common.json in <work-folder>/transcripts and writes <cat>_gpa.csv and
 # <cat>_courses.csv into <work-folder>/<builder>/. python -m out_builder copies
 # <cat>_gpa.csv to out-folder (the Upload tab does that after each run).
-active-category-builder: llm # the default in the Upload and View tabs
+active-category-builder: jev # the default in the Upload and View tabs
 category-builder:
-  llm: # a local LLM answers yes/no per course
-    category-build-model: qwen2.5:3b # yes/no per course; the installer picks one for this machine
-    category-definition-model: qwen2.5:3b # category-definer's ollama step; one call per category, so a bigger model is affordable
-    ollama-url: http://localhost:11434 # any model in `ollama list` there
   jev: # TypeSafe's Jev scores each course 0-1, through the gpa-tools cloud server
     mode: cloud # cloud: the gpa-tools cloud server holds the TypeSafe key; direct: TypeSafe with the key in api-key-env (development)
     cloud-url: https://gpa-tools-jev.johnprofessional132.workers.dev # mode cloud: the server
@@ -88,19 +80,19 @@ category-builder:
 # --- category-definer: drafts a definition for the user to edit -------------------
 # Tries the mode's steps in turn until one gives a definition. chatgpt and gemini
 # are their free web chats, used anonymously (no account, no key) in the installed
-# Chrome or Edge; ollama is category-builder: llm: category-definition-model. Every try is logged to
-# <log-folder>/category_definer.log and shown in the Upload tab.
+# Chrome or Edge. When every step fails, type the definition yourself in the Upload tab.
+# Every try is logged to <log-folder>/category_definer.log and shown in the Upload tab.
 category-definer:
-  mode: dev # dev: chatgpt -> gemini -> ollama, in visible browser windows (needs a desktop)
-  #           prod: gemini (headless, no window) -> ollama
-  retries: 1 # extra tries for chatgpt and gemini (ollama is tried once)
+  mode: dev # dev: chatgpt -> gemini, in visible browser windows (needs a desktop)
+  #           prod: gemini (headless, no window)
+  retries: 1 # extra tries for each site
   browser-timeout: 120 # seconds to wait for a site's reply
   browser: auto # auto (Chrome, else Edge, else Playwright's Chromium), chrome, msedge, chromium
   # profile-folder: ~/gpa-tools-data/work/browser-profiles # default <work-folder>/browser-profiles
 
 # --- category definitions (all builders) ------------------------------------
 # Shared by every category builder; drafted by category-definer, edit freely.
-# Changing a definition clears the llm builder's cached answers for it.
+# Changing a definition clears the jev builder's cached scores for it.
 # Delete an entry to have category-definer draft a new one.
 category-definitions: {}
 """
@@ -161,11 +153,11 @@ def _set_in(text: str, depth: int, parents: list[str], key: str, rendered: str) 
     return text[:block.start(1)] + body + text[block.end(1):]
 
 
-# (section, key, what replaces it): read only while the new key is missing
-OLD_MODEL_KEYS = [
-    (("category-builder", "llm"), "model", "category-build-model / category-definition-model"),
-    (("category-definer",), "model", "category-builder.llm.category-definition-model"),
-    (("category-definer",), "ollama-url", "category-builder.llm.ollama-url"),
+# (section, key): settings of the removed llm builder and Ollama, no longer read
+OLD_OLLAMA_KEYS = [
+    (("category-builder",), "llm"),
+    (("category-definer",), "model"),
+    (("category-definer",), "ollama-url"),
 ]
 
 
@@ -182,19 +174,16 @@ def main(argv=None) -> int:
                                    "<data>/work, out and log for the other three")
     for key in FOLDERS:
         ap.add_argument(f"--{key}", help=f"set {key} (overrides --data)")
-    ap.add_argument("--model", help="category-build-model and category-definition-model")
-    ap.add_argument("--definer-model", help="category-definition-model, if different")
-    ap.add_argument("--ollama-url")
     ap.add_argument("--jev-model", help="the jev builder's TypeSafe model, e.g. jev-1.14.0")
     ap.add_argument("--jev-key-env", help="name of the env var holding the TypeSafe API key")
     ap.add_argument("--jev-mode", choices=("cloud", "direct"),
                     help="cloud: the gpa-tools cloud server (a laptop token); direct: TypeSafe itself (dev)")
     ap.add_argument("--cloud-url", help="the gpa-tools cloud server, mode cloud")
-    ap.add_argument("--active-builder", choices=("llm", "jev"),
+    ap.add_argument("--active-builder", choices=("jev",),
                     help="the builder the Upload and View tabs start with")
     ap.add_argument("--definer-mode", choices=("dev", "prod"),
-                    help="category-definer: dev = chatgpt -> gemini -> ollama in browser "
-                         "windows, prod = gemini headless -> ollama")
+                    help="category-definer: dev = chatgpt -> gemini in browser "
+                         "windows, prod = gemini headless")
     ap.add_argument("--tool-folder", action="append", default=[],
                     help="add a folder holding pdftotext (repeatable)")
     ap.add_argument("--no-mkdir", action="store_true", help="do not create the folders")
@@ -215,12 +204,8 @@ def main(argv=None) -> int:
     for key, value in wanted.items():
         text = set_top(text, key, scalar(value))
 
-    # (path in config.yaml, value): the llm builder's two models, then jev.
-    nested = [(("category-builder", "llm", k), v)
-              for k, v in (("category-build-model", args.model),
-                           ("category-definition-model", args.definer_model or args.model),
-                           ("ollama-url", args.ollama_url)) if v]
-    nested += [(("category-builder", "jev", k), v)
+    # (path in config.yaml, value): the jev builder, then the definer.
+    nested = [(("category-builder", "jev", k), v)
                for k, v in (("mode", args.jev_mode), ("cloud-url", args.cloud_url),
                             ("model", args.jev_model), ("api-key-env", args.jev_key_env)) if v]
     if args.definer_mode:
@@ -260,10 +245,7 @@ def main(argv=None) -> int:
     for key in FOLDERS:
         print(f"  {key}: {parsed.get(key)}")
     print(f"  active-category-builder: {parsed.get('active-category-builder')}")
-    for path in (("category-builder", "llm", "category-build-model"),
-                 ("category-builder", "llm", "category-definition-model"),
-                 ("category-builder", "llm", "ollama-url"),
-                 ("category-definer", "mode"), ("category-builder", "jev", "mode"),
+    for path in (("category-definer", "mode"), ("category-builder", "jev", "mode"),
                  ("category-builder", "jev", "cloud-url"), ("category-builder", "jev", "model"),
                  ("category-builder", "jev", "api-key-env")):
         print(f"  {'.'.join(path)}: {_get(parsed, path)}")
@@ -272,13 +254,16 @@ def main(argv=None) -> int:
     if "provider" in (parsed.get("category-definer") or {}):
         print("  note: category-definer's 'provider:' is from an older config.yaml and is no longer "
               "read; 'mode:' picks the steps now. Delete it by hand.")
-    for where, key, instead in OLD_MODEL_KEYS:
+    for where, key in OLD_OLLAMA_KEYS:
         if key in (_get(parsed, where) or {}):
-            print(f"  note: {'.'.join(where)}.{key} is from an older config.yaml; "
-                  f"{instead} replaces it. Delete it by hand.")
+            print(f"  note: {'.'.join(where)}.{key} is from an older config.yaml; the llm builder "
+                  f"and Ollama were removed, so it is no longer read. Delete it by hand.")
     if "llm-category" in parsed:
-        print("  note: 'llm-category:' is from an older config.yaml and is no longer read; "
-              "its settings now live under category-builder: llm:. Delete it by hand.")
+        print("  note: 'llm-category:' is from an older config.yaml and is no longer read. "
+              "Delete it by hand.")
+    if parsed.get("active-category-builder") == "llm":
+        print("  note: active-category-builder llm was removed; jev is used. "
+              "Set it with --active-builder jev.")
     return 0
 
 

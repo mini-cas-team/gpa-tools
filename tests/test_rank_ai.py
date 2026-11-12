@@ -234,29 +234,15 @@ def test_ask_fails_when_no_provider_answers(cfg, monkeypatch):
 
 def test_load_config_defaults_and_checks(cfg):
     cfg.pop("rank-ai")
-    cfg["category-builder"] = {"llm": {"category-definition-model": "big:7b"}}
     merged = rank_ai.load_config(cfg)
-    assert merged["providers"] == ["ollama"] and merged["model"] == "big:7b"
+    assert merged["providers"] == ["chatgpt", "gemini"]
     assert merged["profile-folder"].name == "rank-ai" and merged["repairs"] == 1
-    cfg["rank-ai"] = {"providers": "gemini", "model": "small:3b"}
+    cfg["rank-ai"] = {"providers": "gemini"}
     assert rank_ai.load_config(cfg)["providers"] == ["gemini"]
-    assert rank_ai.load_config(cfg)["model"] == "small:3b"
-    cfg["rank-ai"] = {"providers": ["bard"]}
-    with pytest.raises(ValueError, match="bard"):
-        rank_ai.load_config(cfg)
-
-
-def test_ollama_provider_holds_the_reply_to_the_answer_schema(monkeypatch):
-    from rank_ai import providers
-    sent = {}
-
-    def post(url, body, headers, timeout):
-        sent.update(url=url, body=body)
-        return {"response": '{"filters": []}'}
-    monkeypatch.setattr(providers, "_post", post)
-    out = providers.Ollama({"ollama-url": "http://h:1/", "model": "m", "timeout": 5, "num-ctx": 8192}).ask("p")
-    assert out == '{"filters": []}' and sent["url"] == "http://h:1/api/generate"
-    assert sent["body"]["format"] is answer.SCHEMA and sent["body"]["options"]["num_ctx"] == 8192
+    for gone in (["bard"], ["ollama"]):  # ollama was removed
+        cfg["rank-ai"] = {"providers": gone}
+        with pytest.raises(ValueError, match=gone[0]):
+            rank_ai.load_config(cfg)
 
 
 def test_claude_provider_needs_its_key_in_the_environment(monkeypatch):

@@ -7,7 +7,7 @@ whichever builder was published last for a category is what out-folder holds.
 The browser_view Upload tab publishes after each run it starts; a run from
 the command line publishes only with --publish, or with:
 
-    python -m out_builder --category STEM [--builder llm]
+    python -m out_builder --category STEM [--builder jev]
 """
 
 from __future__ import annotations

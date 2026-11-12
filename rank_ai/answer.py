@@ -1,8 +1,7 @@
 """Reading an LLM's answer: the JSON object out of its reply, then each filter
 checked against the specs it was offered.
 
-Any provider's reply goes through here: Ollama's schema-constrained JSON, or a
-chat site's free text with the object between BEGIN and END (and maybe a
+Any provider's reply goes through here: a chat site's or Claude's free text with the object between BEGIN and END (and maybe a
 preamble or a code fence around it).
 """
 
@@ -15,24 +14,6 @@ from dataclasses import dataclass, field
 from summary import OPS, Filter, FilterSpec
 
 ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
-# Ollama's format: the answer's shape (min/max are numbers or ISO dates, so untyped)
-SCHEMA = {
-    "type": "object",
-    "properties": {
-        "filters": {"type": "array", "items": {
-            "type": "object",
-            "properties": {"column": {"type": "string"}, "field": {"type": "string"},
-                           "op": {"type": "string", "enum": list(OPS)},
-                           "values": {"type": "array", "items": {"type": "string"}},
-                           "value": {"type": "string"}, "min": {}, "max": {}},
-            "required": ["column", "field", "op"]}},
-        "explanation": {"type": "string"},
-        "unsupported": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["filters", "explanation", "unsupported"],
-}
-
-
 class NoAnswer(ValueError):
     """The reply had no answer object in it."""
 

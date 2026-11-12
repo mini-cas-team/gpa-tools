@@ -1,4 +1,4 @@
-"""Shared fixtures for the upload, llm_category, browser_view and install tests."""
+"""Shared fixtures for the upload, category builder, browser_view and install tests."""
 
 import json
 import sys
@@ -58,26 +58,15 @@ def common_json(work: Path, name: str, courses, institution="TEST UNIVERSITY") -
     return path
 
 
-class FakeLLM:
-    """Stands in for OllamaClient: a course is a member when its code starts with a prefix."""
+class FakeDefiner:
+    """Stands in for a definer step (a web chat): drafts "<CAT> means science."."""
 
-    def __init__(self, url="http://fake", model="fake-model", members=("MATH", "PHYS")):
-        self.url, self.model, self.members = url, model, members
-        self.asked: list[str] = []
+    def __init__(self):
         self.defined: list[str] = []
 
     def define(self, category):
         self.defined.append(category)
         return f"{category} means science."
-
-    def is_member(self, category, definition, code, title):
-        self.asked.append(code)
-        return code.startswith(self.members)
-
-
-@pytest.fixture
-def fake_llm():
-    return FakeLLM()
 
 
 class NoBrowser:
@@ -90,20 +79,13 @@ class NoBrowser:
         raise RuntimeError("no browser in tests")
 
 
-class NoOllama(NoBrowser):
-    def define(self, category):
-        raise OSError("no ollama in tests")
-
-
 @pytest.fixture(autouse=True)
 def no_browser(monkeypatch):
-    """The definer's steps fail at once unless a test fakes them: no test
-    opens a browser or asks the real Ollama (fake_llm and friends replace it)."""
+    """The definer's steps fail at once unless a test fakes them: no test opens a browser."""
     from category_builder import definer
 
     for step in definer.BROWSER_STEPS:
         monkeypatch.setitem(definer.PROVIDERS, step, NoBrowser)
-    monkeypatch.setitem(definer.PROVIDERS, "ollama", NoOllama)
 
 
 @pytest.fixture(autouse=True)

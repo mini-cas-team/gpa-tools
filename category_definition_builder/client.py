@@ -12,9 +12,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from llm_category.llm import DEFINE_PROMPT
-
 from . import pipeline
+
+DEFINE_PROMPT = (
+    "You are helping classify university courses by subject area. "
+    "Write a definition of the course category \"{category}\" in two or three sentences. "
+    "State which academic subjects are included, and name the borderline subjects "
+    "that are NOT included."
+)
 
 # One line on purpose: the legs type it and Enter sends it.
 BROWSER_PROMPT = DEFINE_PROMPT + (

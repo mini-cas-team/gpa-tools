@@ -1,4 +1,4 @@
-"""python -m category_builder --category STEM [--builder llm] [--publish]
+"""python -m category_builder --category STEM [--builder jev] [--publish]
 
 Runs one category builder (default: config.yaml's active-category-builder)
 into <work-folder>/<builder>/; --publish then copies <cat>_gpa.csv to

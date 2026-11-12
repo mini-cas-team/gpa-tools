@@ -4,13 +4,13 @@ Drafting is separate from building: a draft is one call per category, the
 user edits it, and every builder then uses the saved text.  ``mode`` picks
 the steps, tried in turn until one gives a definition (MODES):
 
-    dev   chatgpt (visible window) -> gemini (visible window) -> ollama
-    prod  gemini (headless) -> ollama
+    dev   chatgpt (visible window) -> gemini (visible window)
+    prod  gemini (headless)
 
 chatgpt and gemini are their free web chats, used anonymously through
 category_definition_builder in the installed Chrome or Edge (``browser``);
-they get ``retries`` extra tries each.  ollama is the local model named by
-category-builder: llm: category-definition-model, at that section's ollama-url.
+they get ``retries`` extra tries each.  When every step fails there is no draft:
+the user types the definition (the Upload tab's Add box).
 
     category-definer:
       mode: dev
@@ -29,27 +29,18 @@ from pathlib import Path
 
 from category_definition_builder import Draft, DraftFailed, define
 
-from . import llm_models
 from .definitions import Definitions
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOG_NAME = "category_definer.log"
 DEFAULTS = {"mode": "dev", "retries": 1, "browser-timeout": 120, "browser": "auto"}
-# mode -> (step, headless) in order; headless is None for ollama
+# mode -> (step, headless) in order
 MODES = {
-    "dev": [("chatgpt", False), ("gemini", False), ("ollama", None)],
-    "prod": [("gemini", True), ("ollama", None)],
+    "dev": [("chatgpt", False), ("gemini", False)],
+    "prod": [("gemini", True)],
 }
 BROWSER_STEPS = ("chatgpt", "gemini")  # the ones retried
-OLLAMA_TIMEOUT = 900  # seconds; category-definition-model is picked as large as fits
 BROWSERS = ("auto", "chrome", "msedge", "chromium")
-
-
-def _ollama(cfg: dict):
-    from llm_category.llm import OllamaClient
-
-    # A big definition model can take minutes to load and answer on first use.
-    return OllamaClient(cfg["ollama-url"], cfg["model"], timeout=OLLAMA_TIMEOUT)
 
 
 def _browser(site: str):
@@ -62,7 +53,7 @@ def _browser(site: str):
 
 
 # step -> client factory; a client has define(category) -> str
-PROVIDERS = {"chatgpt": _browser("chatgpt"), "gemini": _browser("gemini"), "ollama": _ollama}
+PROVIDERS = {"chatgpt": _browser("chatgpt"), "gemini": _browser("gemini")}
 
 
 def profile_folder(cfg: dict) -> Path:
@@ -76,12 +67,11 @@ def profile_folder(cfg: dict) -> Path:
 
 
 def load_config(cfg: dict) -> dict:
-    models = llm_models(cfg)
     own = cfg.get("category-definer") or {}
-    merged = {**DEFAULTS, **own, "model": models["category-definition-model"],
-              "ollama-url": models["definer-ollama-url"], "profile-folder": profile_folder(cfg),
+    merged = {**DEFAULTS, **own, "profile-folder": profile_folder(cfg),
               "log-folder": Path(cfg.get("log-folder") or "log").expanduser()}
-    merged.pop("provider", None)  # older config.yaml: provider: ollama, now mode:
+    for old in ("provider", "model", "ollama-url"):  # older config.yaml keys, no longer read
+        merged.pop(old, None)
     if merged["mode"] not in MODES:
         raise ValueError(f"category-definer mode {merged['mode']!r} is unknown "
                          f"(known: {', '.join(MODES)})")
@@ -89,23 +79,19 @@ def load_config(cfg: dict) -> dict:
         raise ValueError(f"category-definer browser {merged['browser']!r} is unknown "
                          f"(known: {', '.join(BROWSERS)})")
     merged["order"] = [step for step, _ in MODES[merged["mode"]]]
-    merged["headless"] = {step: headless for step, headless in MODES[merged["mode"]]
-                          if headless is not None}
+    merged["headless"] = dict(MODES[merged["mode"]])
     merged["retries"] = max(0, int(merged["retries"]))
     return merged
 
 
 def step_names(cfg: dict) -> list[str]:
-    """["chatgpt (window)", "gemini (window)", "ollama"] -- what each step is."""
-    return [f"{s} ({'headless' if cfg['headless'][s] else 'window'})" if s in cfg["headless"]
-            else s for s in cfg["order"]]
+    """["chatgpt (window)", "gemini (window)"] -- what each step is."""
+    return [f"{s} ({'headless' if cfg['headless'][s] else 'window'})" for s in cfg["order"]]
 
 
 def describe(cfg: dict) -> str:
-    """"dev: chatgpt (window) -> gemini (window) -> ollama qwen2.5:3b at http://..."."""
-    names = [f"ollama {cfg['model']} at {cfg['ollama-url']}" if n == "ollama" else n
-             for n in step_names(cfg)]
-    return f"{cfg['mode']}: " + " -> ".join(names)
+    """"dev: chatgpt (window) -> gemini (window)"."""
+    return f"{cfg['mode']}: " + " -> ".join(step_names(cfg))
 
 
 def steps(cfg: dict) -> list:

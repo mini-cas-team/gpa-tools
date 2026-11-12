@@ -207,8 +207,7 @@ class BackgroundJob:
 class CategoryJob(BackgroundJob):
     """The one background builder run the Upload tab can start, then its publish.
 
-    One at a time across all builders: Ollama answers one question at a time,
-    so a second run would only queue behind the first.
+    One at a time across all builders, so two runs never write the same CSVs at once.
     """
 
     def start(self, raw: dict, builder: str, cfg: dict, category: str) -> bool:

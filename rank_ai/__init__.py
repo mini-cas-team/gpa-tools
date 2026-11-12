@@ -9,7 +9,7 @@ The code never looks at what is asked. It sends the LLM
     prompt.build   every filter the objects offer (ABS.filter_specs: fields, their
                    meanings, their known values), their current filters, the request
                    word for word, and the answer format
-    providers      ollama, gemini, chatgpt, claude: ask(prompt) -> reply text,
+    providers      gemini, chatgpt, claude: ask(prompt) -> reply text,
                    tried in config.yaml's rank-ai: providers order
     answer         the JSON object out of the reply, each filter checked against
                    the specs; a problem is told to the same provider, which answers
@@ -19,7 +19,7 @@ and gives each object its filters back (ABS.params) as query params, so the
 page shows the result with its usual filters and dialogs.
 
     rank-ai:
-      providers: [ollama]   # tried in turn until one answers
+      providers: [chatgpt, gemini]   # tried in turn until one answers
       repairs: 1
 
 Every request, its attempts and its answer go to <log-folder>/rank_ai.log.
@@ -40,21 +40,18 @@ from . import answer, prompt as prompts
 from .providers import DEFAULT_CLAUDE_MODEL, PROVIDERS
 
 LOG_NAME = "rank_ai.log"
-DEFAULTS = {"providers": ["ollama"], "repairs": 1, "timeout": 600, "num-ctx": 16384,
+DEFAULTS = {"providers": ["chatgpt", "gemini"], "repairs": 1, "timeout": 600,
             "claude-model": DEFAULT_CLAUDE_MODEL, "claude-api-key-env": "ANTHROPIC_API_KEY"}
 
 
 def load_config(cfg: dict) -> dict:
-    """config.yaml's rank-ai: section over DEFAULTS. The ollama model and URL
-    default to the definer's (the larger model); the browser settings to
-    category-definer's, with a browser profile folder of their own."""
-    from category_builder import definer, llm_models
+    """config.yaml's rank-ai: section over DEFAULTS. The browser settings default
+    to category-definer's, with a browser profile folder of their own."""
+    from category_builder import definer
 
     own = cfg.get("rank-ai") if isinstance(cfg.get("rank-ai"), dict) else {}
-    models = llm_models(cfg)
     definer_cfg = cfg.get("category-definer") if isinstance(cfg.get("category-definer"), dict) else {}
     merged = {**DEFAULTS,
-              "model": models["category-definition-model"], "ollama-url": models["definer-ollama-url"],
               "browser-timeout": definer_cfg.get("browser-timeout", definer.DEFAULTS["browser-timeout"]),
               "browser": definer_cfg.get("browser", definer.DEFAULTS["browser"]),
               "profile-folder": definer.profile_folder(cfg) / "rank-ai",

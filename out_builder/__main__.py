@@ -1,4 +1,4 @@
-"""python -m out_builder --category STEM [--builder llm] [--config config.yaml]"""
+"""python -m out_builder --category STEM [--builder jev] [--config config.yaml]"""
 
 from __future__ import annotations
 

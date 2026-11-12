@@ -2,9 +2,10 @@
 
 Compare students by average **category GPA** (STEM, MEDICAL, ...) read out of
 student transcript PDFs. A category builder decides which courses belong to a
-category: `llm`, a local LLM (Ollama), or `jev`, TypeSafe's hosted model. A
-category's definition is drafted by `category-definer`, through ChatGPT's or
-Gemini's free web chat or the local LLM, and then edited by you.
+category: `jev`, TypeSafe's hosted model, reached through the gpa-tools cloud
+server. A category's definition usually comes from the cloud's shared ones; a new
+one is drafted by `category-definer` through ChatGPT's or Gemini's free web chat
+(or typed by you), and can be edited.
 
 Everything runs on your machine (the **client**) except the calls to Jev, which
 go through the gpa-tools **cloud server** (a Cloudflare Worker, kept in the private repo `mini-cas-team/gpa-tools-cloud`). The TypeSafe API key
@@ -13,10 +14,9 @@ lives only there, and the server shares course scores between clients. See
 
 ```
 PDF ──► upload ──► work/<name>.common.json ──► category builder ──► work/<builder>/<cat>_gpa.csv ──► out_builder ──► out/<cat>_gpa.csv
-        pdftotext   (gpa_4 per course)         llm: Ollama yes/no     work/<builder>/<cat>_courses.csv   (copy)          (public output)
-                                               jev: 0-1 score ◄──► cloud server ◄──► TypeSafe
-                                                    ▲
-                        category-definitions ───────┘  (drafted by category-definer: chatgpt / gemini / ollama)
+        pdftotext   (gpa_4 per course)         jev: 0-1 score         work/<builder>/<cat>_courses.csv   (copy)          (public output)
+                                                ▲  ◄──► cloud server ◄──► TypeSafe
+                        category definitions ───┘  (the cloud's shared ones, or drafted: chatgpt / gemini)
 
 browser_view: the Upload tab drives all three; the View tab reads work/<builder>/
 ```
@@ -28,7 +28,7 @@ browser_view: the Upload tab drives all three; the View tab reads work/<builder>
 ## Getting started
 
 ```bash
-git clone https://github.com/johnprofessional132/gpa-tools.git
+git clone https://github.com/mini-cas-team/gpa-tools.git
 cd gpa-tools
 claude                     # then type:  /install-from-clone, then /install-gpa-tools
 ```
@@ -43,9 +43,10 @@ The `/install-gpa-tools` skill does the rest in your own user account, with no
 admin rights, on Linux, macOS or Windows:
 - the venv (Python 3.14 or 3.12) and packages (Playwright among them; it drives the installed Chrome or Edge)
 - pdftotext (into `.tools/`, if it's missing)
-- Ollama and two qwen2.5 models sized to the machine: a fast one for building (fits in the GPU, if there is one) and the largest that fits for drafting definitions
-- `config.yaml`: folders, the two models and the Ollama URL, the definer's mode and,
-  optionally, the jev builder, set by `install/configure.py`
+- `config.yaml`: folders, the cloud server, the definer's mode, set by `install/configure.py`
+- this laptop's cloud token: it asks with your email, and the package owner approves it
+
+No local model, no GPU and no multi-GB downloads: the heavy work is Jev's, in the cloud.
 
 It checks what is already installed first and asks before downloading. See
 [install/README.md](install/README.md) for the scripts it uses, which also
@@ -62,11 +63,8 @@ Or by hand, on Linux with admin rights:
 python3.14 -m venv .venv                        # or python3.12
 .venv/bin/pip install -r requirements.txt
 sudo apt install poppler-utils                  # pdftotext
-curl -fsSL https://ollama.com/install.sh | sh   # Ollama
-ollama pull qwen2.5:3b                          # build model
-ollama pull qwen2.5:7b                          # definition model
-.venv/bin/python install/configure.py --data ~/gpa-tools-data \
-    --model qwen2.5:3b --definer-model qwen2.5:7b
+.venv/bin/python install/configure.py --data ~/gpa-tools-data
+.venv/bin/python -m jev_category.enroll request --email you@school.edu
 ```
 
 ## Usage
@@ -79,20 +77,16 @@ components: [transcripts, letters, personal]
 input-folder: /home/personal/Templates             # raw input, <input-folder>/<component>/; never written by a run
 work-folder: /home/personal/Templates/work         # made from it, <work-folder>/<component>/; and <builder>/ folders
 out-folder: /home/personal/Templates/out           # published <cat>_gpa.csv, for other applications
-log-folder: /home/personal/Templates/log           # upload, llm_category, jev_category, category_definer, rank_ai, browser_view .log
+log-folder: /home/personal/Templates/log           # upload, jev_category, category_definer, rank_ai, browser_view .log
 min-category-courses: 4      # View tab: hide students with fewer category courses
 run_mode: dev                # dev: the student dialog's letters tab also shows Jev's rank and confidence
 
 active-category-builder: jev # the default in the Upload and View tabs and the CLI
 category-builder:            # one section per builder
-  llm:
-    category-build-model: qwen2.5:3b       # the llm builder's yes/no answers: the fast one
-    category-definition-model: qwen2.5:7b  # category-definer's ollama step: as large as fits
-    ollama-url: http://localhost:11434     # both models: any in `ollama list` there
   jev:
-    mode: direct             # direct: TypeSafe with the key below; cloud: the gpa-tools cloud server holds it
-    cloud-url: ""            # mode cloud: https://gpa-tools-jev.<account>.workers.dev
-    cloud-token-env: GPA_TOOLS_CLOUD_TOKEN   # mode cloud: env var holding this client's token
+    mode: cloud              # cloud: the gpa-tools cloud server holds the TypeSafe key; direct: TypeSafe with the key below (development)
+    cloud-url: https://gpa-tools-jev.johnprofessional132.workers.dev
+    cloud-token-env: GPA_TOOLS_CLOUD_TOKEN   # optional override; the token is ~/.gpa-tools/client_token
     model: jev-1.14.0        # mode direct only; a version pins it; `jev-latest` follows new releases
     api-url: https://api.typesafe.ai/v1/systemone
     api-key-env: GPA_TOOLS_KEY   # env var holding the TypeSafe API key; never the key itself
@@ -100,17 +94,15 @@ category-builder:            # one section per builder
     batch-size: 20           # courses per request
 
 category-definer:            # drafts definitions: the mode's steps in turn until one gives one
-  mode: dev                  # dev: chatgpt -> gemini -> ollama (browser windows); prod: gemini headless -> ollama
+  mode: dev                  # dev: chatgpt -> gemini (browser windows); prod: gemini headless
   retries: 1                 # extra tries for chatgpt and gemini
   browser-timeout: 120       # seconds to wait for a site's reply
   browser: auto              # Chrome, else Edge, else Playwright's Chromium; or chrome / msedge / chromium
 
 rank-ai:                     # View → Rank's Ask AI box
-  providers: [ollama]        # tried in turn until one answers: ollama, gemini, chatgpt, claude
+  providers: [chatgpt]       # tried in turn until one answers: chatgpt, gemini, claude (default [chatgpt, gemini])
   repairs: 1                 # asks again, with the problems, when an answer does not fit
-  # model: qwen2.5:7b        # ollama; default category-definition-model
-  # num-ctx: 16384           # ollama context, in tokens
-  # timeout: 600             # seconds per ollama or claude answer
+  # timeout: 600             # seconds per claude answer
   # claude-model: claude-sonnet-5-5
   # claude-api-key-env: ANTHROPIC_API_KEY
 
@@ -128,7 +120,7 @@ work folder, which holds only what the tools make from it (`folders.py`):
 
 Everything in a work folder can be made again from the input, so deleting it
 only costs a rerun. The builders keep their CSVs and caches in
-`<work-folder>/<builder>/` (`jev/`, `llm/`), and category-definer its browser
+`<work-folder>/<builder>/` (`jev/`), and category-definer its browser
 profiles in `<work-folder>/browser-profiles/`. Both `input-folder` and
 `work-folder` must be set: there is no default. A component left out of
 `components` is turned off (its pages say so) rather than renamed.
@@ -153,9 +145,8 @@ skipped. Files with the same name are replaced.
 
 ```bash
 .venv/bin/python -m category_builder --category STEM              # the active builder
-.venv/bin/python -m category_builder --category STEM --builder llm --publish
-.venv/bin/python -m llm_category --category STEM --limit 3       # llm only, 3 students
-.venv/bin/python -m jev_category --category STEM                 # jev only
+.venv/bin/python -m category_builder --category STEM --builder jev --publish
+.venv/bin/python -m jev_category --category STEM                 # the jev builder directly
 ```
 
 A builder reads every `*.common.json` in `<work-folder>/transcripts` and writes into its own
@@ -165,7 +156,7 @@ folder, `<work-folder>/<builder>/`:
 |---|---|
 | `<cat>_gpa.csv` | one row per student: category GPA, all-courses GPA, category and total course counts, category share |
 | `<cat>_courses.csv` | every counted course with its `is_<cat>` flag, and `<cat>_score` (0–1) from builders that score (jev) |
-| anything else | the builder's own working files (llm, jev: `cache_<cat>.json`) |
+| anything else | the builder's own working files (jev: `cache_<cat>.json`) |
 
 Builders provide data, not a ranking: there is no rank column and no one is
 left out. Rank by sorting the View tab's columns, or however the application
@@ -194,8 +185,8 @@ replaced by `definitions-folder:`. Every cloud definition is downloaded.
 
 The cloud is used only when `category-builder: jev:` is in `mode: cloud` with
 its token set. Otherwise the repo is all there is. Drafting is separate from
-building, so it uses its own sources: the web chats below, then the local
-`category-definition-model`.
+building, so it uses its own sources: the web chats below. When they all fail,
+type the definition yourself in the Upload tab's Add box.
 
 The definer's `mode` picks its steps. It moves on whenever a step fails or
 its reply has no usable definition, and ChatGPT and Gemini get one retry each
@@ -203,10 +194,10 @@ its reply has no usable definition, and ChatGPT and Gemini get one retry each
 
 | mode | steps | needs |
 |---|---|---|
-| `dev` (default) | ChatGPT → Gemini → Ollama, each site in a visible browser window | a desktop session |
-| `prod` | Gemini headless (no window) → Ollama | nothing on screen; fine for a server |
+| `dev` (default) | ChatGPT → Gemini, each site in a visible browser window | a desktop session |
+| `prod` | Gemini headless (no window) | nothing on screen; fine for a server |
 
-Ollama here is `category-definition-model`. Neither mode needs an API key.
+Neither mode needs an API key.
 
 ChatGPT is only in `dev` because it stops a headless browser at its bot check.
 The two sites are used through their free web chats, anonymously, with no
@@ -223,7 +214,7 @@ included. To check one step by hand (nothing is saved):
 ```
 
 The sites' page layouts are not an API: when one changes, that step fails
-and the next takes over, until the selectors in
+and the next takes over (after the last one, you type the definition), until the selectors in
 `category_definition_builder/browser_legs.py` are updated.
 
 **Adding a builder** (e.g. `mine`): write a module with `load_config(config_path)`
@@ -232,43 +223,6 @@ optionally `estimate(cfg, category, definition)`; have it write its CSVs with
 `category_builder.common.write_outputs`; add one line to `BUILDERS` in
 `category_builder/__init__.py` and a `category-builder: mine:` section to
 config.yaml. The Upload and View tabs list it from then on.
-
-#### The llm builder and its two models
-
-Needs [Ollama](https://ollama.com) running locally with both models of
-`category-builder: llm:` pulled:
-
-| key | used for | picked to be |
-|---|---|---|
-| `category-build-model` | this builder's yes/no answer per course, ~400 a run | **fast**: the biggest that fits in GPU memory (up to 14b), 3b without a GPU |
-| `category-definition-model` | category-definer's last step, one call per category | **as large as fits**: GPU memory plus 70% of RAM, up to 14b without a GPU |
-
-The installer picks both from the hardware (`install/check.py`); on a 12 GB
-laptop without a GPU that is 3b and 7b. Change either with
-`install/configure.py --model <build> --definer-model <definition>`.
-
-For every distinct course (code + title) across
-all students it asks the LLM a yes/no question: "using only that definition,
-is this course in the category?" Answers are constrained to `yes`/`no` by a
-JSON schema, at temperature 0, so the same question gets the same answer.
-
-**The cache, `<work-folder>/llm/cache_<cat>.json`, is what makes reruns
-fast.** It is keyed by course and stamped with a hash of
-`category-build-model` and the definition (the definition model is not part
-of it):
-
-- Same definition and category-build-model: every saved answer is reused, no LLM calls, and
-  the two CSVs are rebuilt in seconds from the current `.common.json` files.
-- Edited definition or different category-build-model: the saved answers are discarded and
-  every distinct course is asked again. That is roughly 400 courses for 64
-  students, at about 13–16 s each on a CPU-only laptop, so 1.5–2 hours.
-- New students: only courses not seen before are asked.
-- Answers are saved one by one, so an interrupted run resumes where it stopped.
-- The prompt wording in `llm_category/llm.py` is **not** part of the stamp.
-  After changing a prompt, delete `cache_<cat>.json` by hand.
-
-`llm_category/archive/definitions.yaml` keeps earlier definitions, such as
-STEM, for restoring later.
 
 #### The jev builder
 
@@ -304,8 +258,9 @@ above `threshold`, and the score is kept in `<cat>_courses.csv`: scores near
 the threshold are the borderline courses worth a look, and usually mean the
 definition should say which side they are on.
 
-The cache, `<work-folder>/jev/cache_<cat>.json`, works like the llm builder's
-(stamped with model and definition) but stores scores, so changing
+The cache, `<work-folder>/jev/cache_<cat>.json`, is keyed by course and stamped
+with the model and the definition: a changed definition or model starts it over.
+It stores scores, so changing
 `threshold` needs no new API calls. The model is pinned to a version so
 cached scores and new ones come from the same model; change it on purpose.
 In cloud mode the server has a second, shared cache; see
@@ -314,7 +269,7 @@ In cloud mode the server has a second, shared cache; see
 ### 3. out_builder: publish to out-folder
 
 ```bash
-.venv/bin/python -m out_builder --category STEM [--builder llm]
+.venv/bin/python -m out_builder --category STEM [--builder jev]
 ```
 
 Copies `<work-folder>/<builder>/<cat>_gpa.csv` to `<out-folder>/<cat>_gpa.csv`,
@@ -545,16 +500,14 @@ The code never looks at what is asked (`rank_ai/`):
 |---|---|
 | `ABS.filter_specs()` | each column describes what it can be filtered by, from the data at request time: every field, its meaning (the hover texts), its kind (`in` a list of known values, a from–to `range`, or a setting that `is` one value) and its known values (`profile_fields` lists every value the profiles have). Transcript: `category`, `rank-by` and its three ranges; Recommend Letter: its two ranges; Profile: `show` (the fields shown) and each field |
 | `rank_ai.prompt.build` | the columns and fields, today's date, the current filters (`ABS.current_filters()`, in the answer's own format), the request word for word, the rules (answer with the complete list of filters; take values only from the known ones; put what cannot be done in `unsupported`) and the format: one JSON object between `BEGIN` and `END` |
-| `rank_ai.providers` | `ask(prompt) -> text`, in the order of `rank-ai: providers`: **ollama** (`/api/generate`, temperature 0, its output held to `answer.SCHEMA`), **gemini** and **chatgpt** (the free web chats, as category-definer uses them, with a browser profile of their own in `<work-folder>/browser-profiles/rank-ai/`; a prompt of several lines is entered with Shift+Enter between them), **claude** (the Anthropic Messages API, its key in the environment variable `claude-api-key-env` names). A provider that fails hands over to the next |
+| `rank_ai.providers` | `ask(prompt) -> text`, in the order of `rank-ai: providers`: **gemini** and **chatgpt** (the free web chats, as category-definer uses them, with a browser profile of their own in `<work-folder>/browser-profiles/rank-ai/`; a prompt of several lines is entered with Shift+Enter between them), **claude** (the Anthropic Messages API, its key in the environment variable `claude-api-key-env` names). A provider that fails hands over to the next |
 | `rank_ai.answer` | takes the last JSON object with `filters` out of the reply (any preamble or code fence around it), then checks each filter against the specs: a known column and field, values spelled as the data spells them (ignoring case), range ends that are numbers (or ISO dates) inside the field's bounds. What does not fit is told back to the same provider, which answers again (`repairs` times); after that the filters that fit are applied and the rest listed |
 | `ABS.params()` | each column turns its filters back into its own query params (`prof_show`, `prof_in.<field>`, `gpa_min`, ...). A Profile field that is filtered is also shown, since only a shown field filters |
 
 Every request, its tries and its answer go to `<log-folder>/rank_ai.log`.
-With ollama nothing leaves the machine. The web chats and claude receive the
-prompt, which holds every known profile value (cities, institutions,
-programs, ...) but no student names. One request is answered at a time. On a
-machine without a GPU a 7B model takes minutes to read the prompt; set
-`rank-ai: model:` to a smaller one, or put a web chat first.
+The web chats and claude receive the prompt, which holds every known profile
+value (cities, institutions, programs, ...) but no student names. One request
+is answered at a time.
 
 **This is a localhost tool for one operator.** It serves files from the
 configured folders, and Flask's development server is what `--host` binds;
@@ -702,21 +655,20 @@ category_builder/ builder registry and CLI (python -m category_builder)
   common.py       reading .common.json, writing <cat>_gpa.csv and <cat>_courses.csv
   definitions.py  the local definitions repo, kept in step with the cloud's
   definer.py      category-definer: modes, steps, retries and log
+  cache.py        the per-course answer cache (jev's score cache builds on it)
 category_definition_builder/  drafts a definition via ChatGPT/Gemini in a browser
                   (python -m category_definition_builder STEM)
   browser_legs.py the two sites, browser choice, headless or not (from llm_compare)
   pipeline.py     one browser try per process, with a hard deadline
   client.py       prompt and DEFINITION: ... END parsing
   chain.py        try steps in turn, recording each attempt
-llm_category/     the llm builder (python -m llm_category)
-  builder.py      load_config / run / estimate
-  llm.py          the Ollama prompts
-  store.py        answer cache
 jev_core/         the Jev questions (prompts.json) and request format, shared with the cloud server (a copy lives in gpa-tools-cloud)
 jev_category/     the jev builder (python -m jev_category)
   builder.py      load_config / run / estimate; client(cfg) picks cloud or direct
   client.py       CloudClient (the cloud server) and JevClient (TypeSafe, direct mode)
   store.py        score cache
+  enroll.py       this laptop's cloud token: request, then picked up once approved
+  admin.py        the package owner's side: list, approve, reject, revoke
   seed.py         upload local scores to the cloud's shared store
 out_builder/      publish <cat>_gpa.csv to out-folder (python -m out_builder)
 letter_builder/   recommendation letters: pdf2txt, then rank_letters with Jev
@@ -733,14 +685,28 @@ tests/
 .venv/bin/python -m pytest tests/ -q
 ```
 
-The tests need neither Ollama, pdftotext, a browser nor TypeSafe: all are
-replaced by fakes. The cloud server's tests are in its own repo. They cover transcript conversion and GPA, the builder
-registry and CSV output, both builders and their caches, definitions, the
-definer's modes and attempt log, reply parsing, which model does which job,
-publishing, every browser_view route, and the installer's config editing and
-model choice.
+The tests need neither pdftotext, a browser, TypeSafe nor the cloud server: all
+are replaced by fakes. The cloud server's tests are in its own repo. They cover
+transcript conversion and GPA, the builder registry and CSV output, the jev
+builder and its cache, definitions, laptop tokens, the definer's modes and
+attempt log, reply parsing, publishing, every browser_view route, and the
+installer's config editing.
 
 ## Changes
+
+### 2026-11-12: Ollama removed
+
+- **Jev is the only builder.** The local `llm` builder (`llm_category/`) is gone,
+  and so is Ollama: there are no models to download and no GPU sizing.
+- **The definer's chain is shorter.** `dev` is ChatGPT → Gemini, and `prod` is
+  Gemini headless. When every step fails, you type the definition. New categories
+  rarely need a draft, because the cloud shares its definitions.
+- **Ask AI** offers chatgpt, gemini and claude. Its default is `[chatgpt, gemini]`.
+- **The installer is lighter.** `install/get_ollama.py` and `install/ollama_check.py`
+  are gone, and `configure.py` lost `--model`, `--definer-model` and `--ollama-url`.
+- **Older config.yaml files still load.** `category-builder: llm:`,
+  `active-category-builder: llm` and the definer's `model`/`ollama-url` are ignored,
+  and `install/check.py` and `configure.py` point them out.
 
 ### 2026-11-12: the cloud server moved to a private repo
 

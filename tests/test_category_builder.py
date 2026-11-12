@@ -8,14 +8,14 @@ import out_builder
 from category_builder import common, definer
 from category_builder.definitions import SECTION_HEADER, Definitions
 
-from conftest import FakeLLM, common_json
+from conftest import FakeDefiner, common_json
 
 
-def test_registry_has_llm_and_rejects_unknown_names():
-    assert category_builder.names() == ["llm", "jev"]
-    assert category_builder.get("llm").NAME == "llm"
-    with pytest.raises(category_builder.UnknownBuilder, match="known: llm"):
-        category_builder.get("nope")
+def test_registry_has_jev_and_rejects_unknown_names():
+    assert category_builder.names() == ["jev"]
+    assert category_builder.get("jev").NAME == "jev"
+    with pytest.raises(category_builder.UnknownBuilder, match="known: jev"):
+        category_builder.get("llm")  # removed with Ollama
 
 
 def test_every_registered_builder_has_the_contract():
@@ -26,11 +26,11 @@ def test_every_registered_builder_has_the_contract():
 
 def test_active_builder_and_folders():
     cfg = {"work-folder": "/w"}
-    assert category_builder.active(cfg) == "llm"
-    assert category_builder.active({"active-category-builder": "nope"}) == "llm"
-    assert category_builder.folder(cfg, "llm").as_posix() == "/w/llm"
+    assert category_builder.active(cfg) == "jev"
+    assert category_builder.active({"active-category-builder": "llm"}) == "jev"  # an older config
+    assert category_builder.folder(cfg, "jev").as_posix() == "/w/jev"
     with pytest.raises(KeyError):
-        category_builder.folder({}, "llm")
+        category_builder.folder({}, "jev")
 
 
 def test_load_student_keeps_only_gpa_courses(tmp_path):
@@ -154,40 +154,23 @@ def test_an_edit_is_a_local_override_until_use_cloud(tmp_path):
     assert defs.use_cloud("NONE") is None
 
 
-def test_definer_falls_back_to_the_llm_builder_settings():
-    cfg = {"category-builder": {"llm": {"model": "small", "ollama-url": "http://h:1"}},
-           "work-folder": "/w", "log-folder": "/l"}
+def test_definer_settings_and_older_ollama_keys():
+    cfg = {"work-folder": "/w", "log-folder": "/l"}
     assert definer.load_config(cfg) == {
         "mode": "dev", "retries": 1, "browser-timeout": 120, "browser": "auto",
-        "model": "small", "ollama-url": "http://h:1",
         "profile-folder": Path("/w/browser-profiles"), "log-folder": Path("/l"),
-        "order": ["chatgpt", "gemini", "ollama"], "headless": {"chatgpt": False, "gemini": False}}
-    # an older config.yaml's provider: ollama is ignored
-    cfg["category-definer"] = {"model": "big", "provider": "ollama", "mode": "prod",
-                               "profile-folder": "/p"}
+        "order": ["chatgpt", "gemini"], "headless": {"chatgpt": False, "gemini": False}}
+    # an older config.yaml's provider:, model: and ollama-url: are ignored
+    cfg["category-definer"] = {"model": "big", "ollama-url": "http://h:1", "provider": "ollama",
+                               "mode": "prod", "profile-folder": "/p"}
     got = definer.load_config(cfg)
-    assert (got["model"], got["order"], got["headless"], got["profile-folder"]) == (
-        "big", ["gemini", "ollama"], {"gemini": True}, Path("/p"))
-    assert "provider" not in got
-    assert definer.describe(got) == "prod: gemini (headless) -> ollama big at http://h:1"
+    assert (got["order"], got["headless"], got["profile-folder"]) == (["gemini"], {"gemini": True}, Path("/p"))
+    assert not {"provider", "model", "ollama-url"} & set(got)
+    assert definer.describe(got) == "prod: gemini (headless)"
     with pytest.raises(ValueError, match="'test'"):
         definer.load_config({"category-definer": {"mode": "test"}})
     with pytest.raises(ValueError, match="'firefox'"):
         definer.load_config({"category-definer": {"browser": "firefox"}})
-
-
-def test_llm_models_reads_the_two_models_and_older_keys():
-    assert category_builder.llm_models({}) == {
-        "category-build-model": "qwen2.5:3b", "category-definition-model": "qwen2.5:3b",
-        "ollama-url": "http://localhost:11434", "definer-ollama-url": "http://localhost:11434"}
-    cfg = {"category-builder": {"llm": {"category-build-model": "b", "category-definition-model": "d",
-                                        "ollama-url": "http://h:1", "model": "old"}},
-           "category-definer": {"model": "older"}}
-    models = category_builder.llm_models(cfg)
-    assert (models["category-build-model"], models["category-definition-model"]) == ("b", "d")
-    assert definer.load_config(cfg)["model"] == "d"
-    del cfg["category-builder"]["llm"]["category-definition-model"]
-    assert definer.load_config(cfg)["model"] == "older"
 
 
 def test_definer_modes_pass_headless_and_browser_to_the_sites(monkeypatch):
@@ -203,13 +186,14 @@ def test_definer_modes_pass_headless_and_browser_to_the_sites(monkeypatch):
     monkeypatch.setattr("category_definition_builder.BrowserClient", Client)
     for step in definer.BROWSER_STEPS:  # undo conftest's no_browser for this test
         monkeypatch.setitem(definer.PROVIDERS, step, definer._browser(step))
-    monkeypatch.setitem(definer.PROVIDERS, "ollama", lambda c: FakeLLM())
     cfg = {"category-definer": {"retries": 0, "browser": "msedge", "browser-timeout": 9}}
-    assert definer.draft(cfg, "LAW").source == "ollama"
+    with pytest.raises(definer.DraftFailed):  # no step left after the sites
+        definer.draft(cfg, "LAW")
     assert made == [("chatgpt", 9, False, "msedge"), ("gemini", 9, False, "msedge")]
     made.clear()
     cfg["category-definer"]["mode"] = "prod"
-    assert definer.draft(cfg, "LAW").source == "ollama"
+    with pytest.raises(definer.DraftFailed):
+        definer.draft(cfg, "LAW")
     assert made == [("gemini", 9, True, "msedge")]
     with pytest.raises(ValueError, match="chatgpt is not a step of mode prod"):
         definer.draft(cfg, "LAW", only="chatgpt")
@@ -230,12 +214,12 @@ def test_definer_tries_steps_in_order_and_logs_every_attempt(tmp_path, monkeypat
                 raise OSError(f"{self.step} down")
             return f"{category} from {self.step}."
 
-    for step in ("chatgpt", "gemini", "ollama"):
+    for step in ("chatgpt", "gemini"):
         monkeypatch.setitem(definer.PROVIDERS, step, lambda c, s=step: Flaky(s))
     cfg = {"log-folder": str(tmp_path / "log")}
     draft = definer.draft(cfg, "LAW")
     assert (draft.definition, draft.source) == ("LAW from gemini.", "gemini")
-    assert calls == ["chatgpt", "chatgpt", "gemini", "gemini"]  # ollama never asked
+    assert calls == ["chatgpt", "chatgpt", "gemini", "gemini"]
     assert [(a.step, a.attempt, a.error) for a in draft.attempts] == [
         ("chatgpt", 1, "OSError: chatgpt down"), ("chatgpt", 2, "OSError: chatgpt down"),
         ("gemini", 1, "OSError: gemini down"), ("gemini", 2, None)]
@@ -252,27 +236,27 @@ def test_definer_tries_steps_in_order_and_logs_every_attempt(tmp_path, monkeypat
 
 
 def test_definition_for_drafts_once(tmp_path, monkeypatch):
-    llm = FakeLLM()
-    monkeypatch.setitem(definer.PROVIDERS, "ollama", lambda c: llm)
+    gemini = FakeDefiner()
+    monkeypatch.setitem(definer.PROVIDERS, "gemini", lambda c: gemini)
     config = tmp_path / "config.yaml"
     config.write_text("a: 1\n", encoding="utf-8")
     cfg = {"log-folder": str(tmp_path / "log")}
     assert definer.definition_for(config, cfg, "STEM") == ("STEM means science.", "drafted")
     assert definer.definition_for(config, cfg, "STEM") == ("STEM means science.", "repo")
-    assert llm.defined == ["STEM"]
+    assert gemini.defined == ["STEM"]
 
 
 def test_out_builder_copies_only_the_gpa_csv(tmp_path):
     cfg = {"work-folder": str(tmp_path / "work"), "out-folder": str(tmp_path / "out")}
-    built = tmp_path / "work" / "llm"
+    built = tmp_path / "work" / "jev"
     built.mkdir(parents=True)
     (built / "stem_gpa.csv").write_text("student\nAnn\n")
     (built / "stem_courses.csv").write_text("x\n")
-    target = out_builder.publish(cfg, "llm", "STEM")
+    target = out_builder.publish(cfg, "jev", "STEM")
     assert target == tmp_path / "out" / "stem_gpa.csv" and target.read_text() == "student\nAnn\n"
     assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["stem_gpa.csv"]
-    with pytest.raises(FileNotFoundError, match="no law_gpa.csv from the llm builder"):
-        out_builder.publish(cfg, "llm", "LAW")
+    with pytest.raises(FileNotFoundError, match="no law_gpa.csv from the jev builder"):
+        out_builder.publish(cfg, "jev", "LAW")
     with pytest.raises(category_builder.UnknownBuilder):
         out_builder.publish(cfg, "nope", "STEM")
 
@@ -284,7 +268,7 @@ def test_out_builder_cli(tmp_path, capsys):
     config.write_text(f"work-folder: {tmp_path / 'work'}\nout-folder: {tmp_path / 'out'}\n")
     assert main(["--config", str(config), "--category", "stem"]) == 1
     assert "no stem_gpa.csv" in capsys.readouterr().err
-    (tmp_path / "work" / "llm").mkdir(parents=True)
-    (tmp_path / "work" / "llm" / "stem_gpa.csv").write_text("a\n")
+    (tmp_path / "work" / "jev").mkdir(parents=True)
+    (tmp_path / "work" / "jev" / "stem_gpa.csv").write_text("a\n")
     assert main(["--config", str(config), "--category", "stem"]) == 0
     assert (tmp_path / "out" / "stem_gpa.csv").read_text() == "a\n"

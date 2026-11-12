@@ -3,7 +3,7 @@
 Asks ChatGPT or Gemini through their free web chats, anonymously, in the
 installed Chrome or Edge (Gemini headless; ChatGPT only in a visible window).
 category_builder.definer picks the steps from config.yaml's mode and falls
-back to the local Ollama model.  Started as a copy of llm_compare (~/tmp/browser).
+back to the next step.  Started as a copy of llm_compare (~/tmp/browser).
 
     python -m category_definition_builder STEM     # print a draft; nothing is saved
 

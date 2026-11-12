@@ -7,39 +7,6 @@ import check
 import configure
 
 
-NVIDIA = lambda gb: [{"vendor": "nvidia", "name": "GPU", "vram_gb": gb}]  # noqa: E731
-APPLE = lambda gb: [{"vendor": "apple", "name": "M", "vram_gb": gb}]  # noqa: E731
-
-
-@pytest.mark.parametrize("ram, gpus, build, definition", [
-    # no GPU: build stays 3b (fast on a CPU); definition grows with RAM, up to 14b
-    (11.6, [], "qwen2.5:3b", "qwen2.5:7b"),
-    (64, [], "qwen2.5:3b", "qwen2.5:14b"),
-    (6, [], "qwen2.5:1.5b", "qwen2.5:3b"),
-    (None, [], "qwen2.5:3b", "qwen2.5:3b"),
-    (32, [{"vendor": "other", "name": "Intel UHD", "vram_gb": None}], "qwen2.5:3b", "qwen2.5:14b"),
-    # GPU: build is the biggest that fits in it; definition uses GPU + RAM
-    (16, NVIDIA(8), "qwen2.5:7b", "qwen2.5:14b"),
-    (16, NVIDIA(12), "qwen2.5:14b", "qwen2.5:32b"),
-    (64, NVIDIA(24), "qwen2.5:14b", "qwen2.5:32b"),  # build capped at 14b
-    (128, NVIDIA(48), "qwen2.5:14b", "qwen2.5:72b"),
-    (16, NVIDIA(2), "qwen2.5:3b", "qwen2.5:14b"),  # too small for the GPU: CPU build
-    (16, APPLE(16), "qwen2.5:7b", "qwen2.5:14b"),
-    (8, APPLE(8), "qwen2.5:3b", "qwen2.5:3b"),
-])
-def test_recommended_models_follow_ram_and_gpu(ram, gpus, build, definition):
-    picked = check.recommend_models(ram, gpus)
-    assert (picked["build"]["model"], picked["definition"]["model"]) == (build, definition)
-    assert picked["build"]["reason"] and picked["definition"]["reason"]
-    assert picked["download_gb"] == round(sum(check.MODEL_GB[m] for m in {build, definition}), 1)
-
-
-def test_a_gpu_build_model_fits_in_gpu_memory():
-    for gb in (4, 6, 8, 10, 12, 16, 24, 80):
-        model = check.recommend_models(32, NVIDIA(gb))["build"]["model"]
-        assert check.MODEL_GB[model] + check.OVERHEAD_GB <= gb
-
-
 @pytest.mark.parametrize("value", ["/home/ann/data", "C:/Users/Ann/data", "qwen2.5:3b"])
 def test_scalar_leaves_plain_values_alone(value):
     assert configure.scalar(value) == value
@@ -72,8 +39,8 @@ def test_set_top_prefers_a_live_line_over_a_commented_one():
 def test_set_nested_stays_inside_its_block():
     text = "block:\n  model: a # keep\n\nother:\n  model: z\n"
     text = configure.set_nested(text, "block", "model", "b")
-    text = configure.set_nested(text, "block", "ollama-url", "http://h:1")
-    assert yaml.safe_load(text) == {"block": {"model": "b", "ollama-url": "http://h:1"},
+    text = configure.set_nested(text, "block", "url", "http://h:1")
+    assert yaml.safe_load(text) == {"block": {"model": "b", "url": "http://h:1"},
                                     "other": {"model": "z"}}
     assert "model: b # keep" in text
 
@@ -84,12 +51,12 @@ def test_set_nested_adds_a_missing_block():
 
 
 def test_set_nested_goes_two_levels_deep():
-    text = "category-builder:\n  llm:\n    model: a # keep\n  jev:\n    model: j\n\nz: 1\n"
-    text = configure.set_nested(text, ["category-builder", "llm"], "model", "b")
-    text = configure.set_nested(text, ["category-builder", "llm"], "ollama-url", "http://h:1")
+    text = "category-builder:\n  one:\n    model: a # keep\n  jev:\n    model: j\n\nz: 1\n"
+    text = configure.set_nested(text, ["category-builder", "one"], "model", "b")
+    text = configure.set_nested(text, ["category-builder", "one"], "url", "http://h:1")
     text = configure.set_nested(text, ["category-builder", "other"], "model", "o")
     assert yaml.safe_load(text) == {"category-builder": {
-        "llm": {"model": "b", "ollama-url": "http://h:1"}, "jev": {"model": "j"},
+        "one": {"model": "b", "url": "http://h:1"}, "jev": {"model": "j"},
         "other": {"model": "o"}}, "z": 1}
     assert "    model: b # keep" in text and text.endswith("\n\nz: 1\n")
     assert configure.set_nested("", ["a", "b"], "k", "v") == "a:\n  b:\n    k: v\n"
@@ -98,15 +65,13 @@ def test_set_nested_goes_two_levels_deep():
 def test_template_is_valid_yaml_with_every_key():
     cfg = yaml.safe_load(configure.TEMPLATE)
     assert set(configure.FOLDERS) <= set(cfg)
-    assert cfg["category-builder"]["llm"] == {"category-build-model": "qwen2.5:3b",
-                                              "category-definition-model": "qwen2.5:3b",
-                                              "ollama-url": "http://localhost:11434"}
-    assert "model" not in cfg["category-definer"]
+    assert list(cfg["category-builder"]) == ["jev"]
+    assert "model" not in cfg["category-definer"] and "ollama" not in configure.TEMPLATE.lower()
     assert cfg["category-builder"]["jev"] == {
         "mode": "cloud", "cloud-url": "https://gpa-tools-jev.johnprofessional132.workers.dev", "cloud-token-env": "GPA_TOOLS_CLOUD_TOKEN",
         "model": "jev-1.14.0", "api-url": "https://api.typesafe.ai/v1/systemone",
         "api-key-env": "GPA_TOOLS_KEY", "threshold": 0.5, "batch-size": 20}
-    assert cfg["active-category-builder"] == "llm"
+    assert cfg["active-category-builder"] == "jev"
     assert cfg["category-definer"]["mode"] == "dev"
     assert cfg["category-definer"]["retries"] == 1
     assert cfg["category-definitions"] == {}
@@ -116,18 +81,14 @@ def test_template_is_valid_yaml_with_every_key():
 
 def test_configure_creates_config_from_the_template(tmp_path, capsys):
     config, data = tmp_path / "config.yaml", tmp_path / "d"
-    assert configure.main(["--config", str(config), "--data", str(data),
-                           "--model", "qwen2.5:7b", "--ollama-url", "http://box:11434",
-                           "--definer-model", "qwen2.5:14b"]) == 0
+    assert configure.main(["--config", str(config), "--data", str(data)]) == 0
     cfg = yaml.safe_load(config.read_text(encoding="utf-8"))
     for key, sub in configure.FOLDERS.items():
         assert cfg[key] == (data / sub).as_posix()
         assert (data / sub).is_dir()
     for component in ("transcripts", "letters", "personal"):  # input and work, one each
         assert (data / component).is_dir() and (data / "work" / component).is_dir()
-    assert cfg["category-builder"]["llm"] == {"category-build-model": "qwen2.5:7b",
-                                              "category-definition-model": "qwen2.5:14b",
-                                              "ollama-url": "http://box:11434"}
+    assert cfg["category-builder"]["jev"]["mode"] == "cloud"
     assert cfg["category-definer"] == {"mode": "dev", "retries": 1, "browser-timeout": 120,
                                        "browser": "auto"}
     assert config.read_text(encoding="utf-8").startswith("# gpa-tools configuration")
@@ -167,17 +128,17 @@ def test_tool_folders_are_added_once(tmp_path):
     assert after.replace(f"tool-folders: [{folder}]", "# tool-folders: []") == before
 
 
-def test_a_new_config_loads_in_llm_category_and_browser_view(tmp_path):
-    import llm_category.builder as llm_run
+def test_a_new_config_loads_in_the_jev_builder_and_browser_view(tmp_path):
+    import jev_category.builder as jev_run
     from browser_view.app import create_app
     from category_builder.definitions import Definitions
 
     config = tmp_path / "config.yaml"
     configure.main(["--config", str(config), "--data", str(tmp_path / "d")])
-    cfg = llm_run.load_config(config)
-    assert cfg["model"] == "qwen2.5:3b" and cfg["in"] == tmp_path / "d" / "work" / "transcripts"
-    assert cfg["folder"] == tmp_path / "d" / "work" / "llm"
-    assert Definitions(config).data == {}
+    cfg = jev_run.load_config(config)
+    assert cfg["mode"] == "cloud" and cfg["in"] == tmp_path / "d" / "work" / "transcripts"
+    assert cfg["folder"] == tmp_path / "d" / "work" / "jev"
+    assert Definitions(config, cloud=None).data == {}
     assert create_app(config).test_client().get("/categories").get_json()["names"] == []
 
 
@@ -191,43 +152,29 @@ def test_tool_folders_go_first_on_path(monkeypatch, tmp_path):
     assert os.environ["PATH"].split(os.pathsep) == [str(tmp_path), "/usr/bin"]
 
 
-def test_check_reports_builder_definer_and_outdated_keys(monkeypatch):
-    new = {"active-category-builder": "llm",
-           "category-builder": {"llm": {"category-build-model": "small",
-                                        "category-definition-model": "big",
-                                        "ollama-url": "http://a:1"}},
-           "category-definer": {}}
+def test_check_reports_builder_definer_and_outdated_keys():
+    new = {"active-category-builder": "jev", "category-builder": {"jev": {}}, "category-definer": {}}
     info = check.config_info(new, "present")
-    assert (info["category-build-model"], info["category-definition-model"], info["ollama-url"],
-            info["active-category-builder"]) == ("small", "big", "http://a:1", "llm")
-    assert info["definer"] == {"mode": "dev", "retries": 1, "browser": "auto",
-                               "ollama-url": "http://a:1"}
+    assert info["active-category-builder"] == "jev"
+    assert info["definer"] == {"mode": "dev", "retries": 1, "browser": "auto"}
     assert info["outdated"] == {}
     older = check.config_info({"category-definer": {"provider": "ollama"}}, "present")
     assert "category-definer: provider" in older["outdated"]
-    old = check.config_info({"llm-category": {"model": "m"}}, "present")
-    assert old["category-build-model"] == "qwen2.5:3b" and "llm-category" in old["outdated"]
-    # before the two models: llm's model for both, category-definer's own model wins for drafts
-    two = check.config_info({"category-builder": {"llm": {"model": "small"}},
-                             "category-definer": {"model": "big"}}, "present")
-    assert (two["category-build-model"], two["category-definition-model"]) == ("small", "big")
-    assert {"category-builder: llm: model", "category-definer: model"} <= set(two["outdated"])
-
-    monkeypatch.setattr(check, "ollama_binary", lambda: None)
-    monkeypatch.setattr(check, "probe_ollama", lambda url: {"url": url})
-    new["category-definer"]["ollama-url"] = "http://b:2"
-    assert [s["url"] for s in check.ollama_info(new)["servers"]] == \
-        [check.DEFAULT_OLLAMA_URL, "http://a:1", "http://b:2"]
+    assert "llm-category" in check.config_info({"llm-category": {"model": "m"}}, "present")["outdated"]
+    # the removed llm builder and Ollama: every key of theirs is pointed out
+    gone = check.config_info({"active-category-builder": "llm",
+                              "category-builder": {"llm": {"category-build-model": "small"}},
+                              "category-definer": {"model": "big", "ollama-url": "http://a:1"}}, "present")
+    assert {"category-builder: llm", "active-category-builder: llm", "category-definer: model",
+            "category-definer: ollama-url"} <= set(gone["outdated"])
 
 
 def test_configure_points_out_an_outdated_llm_category_block(tmp_path, capsys):
     config = tmp_path / "config.yaml"
     config.write_text("llm-category:\n  model: old\n", encoding="utf-8")
-    assert configure.main(["--config", str(config), "--model", "new", "--no-mkdir"]) == 0
+    assert configure.main(["--config", str(config), "--active-builder", "jev", "--no-mkdir"]) == 0
     assert "'llm-category:' is from an older config.yaml" in capsys.readouterr().out
-    cfg = yaml.safe_load(config.read_text(encoding="utf-8"))
-    assert cfg["category-builder"]["llm"]["category-build-model"] == "new"
-    assert cfg["llm-category"] == {"model": "old"}
+    assert yaml.safe_load(config.read_text(encoding="utf-8"))["llm-category"] == {"model": "old"}
 
 
 def test_configure_sets_jev_and_the_active_builder(tmp_path, capsys):
@@ -329,16 +276,17 @@ def test_configure_sets_the_definer_mode(tmp_path, capsys):
         configure.main(["--config", str(config), "--definer-mode", "test"])
 
 
-def test_configure_points_out_the_older_model_keys(tmp_path, capsys):
+def test_configure_points_out_the_removed_ollama_keys(tmp_path, capsys):
     config = tmp_path / "config.yaml"
-    config.write_text("category-builder:\n  llm:\n    model: a\ncategory-definer:\n  model: b\n",
-                      encoding="utf-8")
-    assert configure.main(["--config", str(config), "--model", "c", "--no-mkdir"]) == 0
+    config.write_text("active-category-builder: llm\ncategory-builder:\n  llm:\n    model: a\n"
+                      "category-definer:\n  model: b\n  ollama-url: http://h:1\n", encoding="utf-8")
+    assert configure.main(["--config", str(config), "--no-mkdir"]) == 0
     out = capsys.readouterr().out
-    assert "category-builder.llm.model is from an older config.yaml" in out
-    assert "category-definer.model is from an older config.yaml" in out
-    llm = yaml.safe_load(config.read_text(encoding="utf-8"))["category-builder"]["llm"]
-    assert (llm["category-build-model"], llm["category-definition-model"]) == ("c", "c")
+    for key in ("category-builder.llm", "category-definer.model", "category-definer.ollama-url"):
+        assert f"{key} is from an older config.yaml" in out
+    assert "active-category-builder llm was removed" in out
+    with pytest.raises(SystemExit):
+        configure.main(["--config", str(config), "--active-builder", "llm"])
 
 
 # ---- setup_venv: which Python makes .venv ------------------------------------

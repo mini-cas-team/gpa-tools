@@ -12,7 +12,7 @@ from browser_view.app import create_app
 from category_builder import definer
 from category_builder.common import RunError
 
-from conftest import FakeLLM, common_json
+from conftest import FakeDefiner, common_json
 
 GPA_HEADER = ("student,institution,program,STEM_GPA,all_courses_GPA,"
               "stem_courses,total_courses,stem_all_pct,file\n")
@@ -20,8 +20,8 @@ GPA_HEADER = ("student,institution,program,STEM_GPA,all_courses_GPA,"
 
 @pytest.fixture
 def folders(tmp_path):
-    """work-folder/llm with STEM results, <input-folder>/transcripts with ann.pdf, and config.yaml."""
-    built, pdfs = tmp_path / "work" / "llm", tmp_path / "in" / "transcripts"
+    """work-folder/jev with STEM results, <input-folder>/transcripts with ann.pdf, and config.yaml."""
+    built, pdfs = tmp_path / "work" / "jev", tmp_path / "in" / "transcripts"
     built.mkdir(parents=True)
     pdfs.mkdir(parents=True)
     (pdfs / "ann.pdf").write_bytes(b"%PDF-1.4 ann")
@@ -47,7 +47,7 @@ def client(folders):
     return create_app(folders[1]).test_client()
 
 
-def courses_for(client, name, category="STEM", builder="llm"):
+def courses_for(client, name, category="STEM", builder="jev"):
     return client.get("/transcripts/view/student",
                       query_string={"builder": builder, "category": category, "file": name})
 
@@ -134,7 +134,7 @@ def test_view_shows_every_student_with_a_min_courses_filter(client, folders):
     # No ranking server-side: Bob is listed; the filter (default from config) hides him.
     assert 'data-file="bob.pdf"' in body and 'data-courses="1"' in body
     assert 'id="min-courses"' in body and 'value="3"' in body
-    assert '<option value="llm" selected>' in body
+    assert '<option value="jev" selected>' in body
     assert "Held back" not in body
 
 
@@ -316,10 +316,11 @@ def test_upload_needs_a_work_folder(tmp_path):
 # --- categories -----------------------------------------------------------------
 
 @pytest.fixture
-def fake_llm(monkeypatch):
-    llm = FakeLLM()
-    monkeypatch.setitem(definer.PROVIDERS, "ollama", lambda c: llm)
-    return llm
+def fake_gemini(monkeypatch):
+    """Gemini drafts; ChatGPT still fails (no browser in tests)."""
+    gemini = FakeDefiner()
+    monkeypatch.setitem(definer.PROVIDERS, "gemini", lambda c: gemini)
+    return gemini
 
 
 def test_categories_list_the_definitions_repo(client, folders):
@@ -328,8 +329,8 @@ def test_categories_list_the_definitions_repo(client, folders):
     repo = Path(data["path"])
     assert data == {"categories": {"STEM": "Science and maths."}, "names": ["STEM"],
                     "path": str(repo), "origins": {"STEM": "local"},
-                    "builders": ["llm", "jev"], "active_builder": "llm",
-                    "definer": ["chatgpt (window)", "gemini (window)", "ollama"]}
+                    "builders": ["jev"], "active_builder": "jev",
+                    "definer": ["chatgpt (window)", "gemini (window)"]}
     assert (repo / "STEM.json").exists()
     text = folders[1].read_text()
     assert "category-definitions" not in text and f"definitions-folder: {repo}" in text
@@ -337,29 +338,23 @@ def test_categories_list_the_definitions_repo(client, folders):
     assert client.get("/categories").get_json()["names"] == ["STEM", "ZOO"]
 
 
-def test_draft_falls_back_to_the_llm_without_saving(client, fake_llm, folders):
+def test_draft_falls_back_to_the_next_site_without_saving(client, fake_gemini, folders):
     data = client.post("/categories/draft", data={"name": " business "}).get_json()
     assert (data["name"], data["definition"], data["source"]) == (
-        "BUSINESS", "BUSINESS means science.", "ollama")
-    # chatgpt and gemini (no browser in tests) each fail twice: one try plus one retry
+        "BUSINESS", "BUSINESS means science.", "gemini")
+    # chatgpt (no browser in tests) fails twice: one try plus one retry
     assert [(a["step"], a["attempt"], a["error"] is None) for a in data["attempts"]] == [
-        ("chatgpt", 1, False), ("chatgpt", 2, False), ("gemini", 1, False),
-        ("gemini", 2, False), ("ollama", 1, True)]
+        ("chatgpt", 1, False), ("chatgpt", 2, False), ("gemini", 1, True)]
     assert "no browser in tests" in data["attempts"][0]["error"]
     assert "BUSINESS" not in folders[1].read_text()
 
 
-def test_draft_reports_every_failed_try(client, monkeypatch):
-    class Down(FakeLLM):
-        def define(self, category):
-            raise OSError("refused")
-
-    monkeypatch.setitem(definer.PROVIDERS, "ollama", lambda c: Down())
+def test_draft_reports_every_failed_try(client):
     r = client.post("/categories/draft", data={"name": "LAW"})
     data = r.get_json()
     assert r.status_code == 502 and "every step failed" in data["error"]
-    assert [a["step"] for a in data["attempts"]] == ["chatgpt", "chatgpt", "gemini", "gemini", "ollama"]
-    assert "refused" in data["attempts"][-1]["error"]
+    assert [a["step"] for a in data["attempts"]] == ["chatgpt", "chatgpt", "gemini", "gemini"]
+    assert "no browser in tests" in data["attempts"][-1]["error"]
 
 
 def test_draft_rejects_an_unknown_definer_mode(client, folders):
@@ -404,9 +399,9 @@ def test_replace_needs_an_existing_category(client, folders):
     ("/categories", {"name": "STEM", "definition": "again"}, 409),
     ("/categories", {"name": "LAW", "definition": " "}, 400),
 ])
-def test_bad_category_requests_never_reach_the_llm(client, fake_llm, path, form, status):
+def test_bad_category_requests_never_reach_the_definer(client, fake_gemini, path, form, status):
     assert client.post(path, data=form).status_code == status
-    assert fake_llm.defined == []
+    assert fake_gemini.defined == []
 
 
 # --- runs -----------------------------------------------------------------------
@@ -436,14 +431,14 @@ def wait_for_job(client):
 
 
 @pytest.fixture
-def llm_builder():
-    import llm_category.builder
+def jev_builder():
+    import jev_category.builder
 
-    return llm_category.builder
+    return jev_category.builder
 
 
 def test_run_goes_in_the_background_then_publishes(client, monkeypatch, folders, tmp_path,
-                                                   llm_builder):
+                                                   jev_builder):
     built, _ = folders
     seen = []
 
@@ -453,41 +448,41 @@ def test_run_goes_in_the_background_then_publishes(client, monkeypatch, folders,
         progress(2, 2)
         return built / "stem_gpa.csv"
 
-    monkeypatch.setattr(llm_builder, "run", fake_run)
+    monkeypatch.setattr(jev_builder, "run", fake_run)
     assert client.get("/runs/status").get_json() == {"status": "idle"}
     assert client.post("/runs", data={"category": "LAW"}).status_code == 404
     assert client.post("/runs", data={"category": "stem", "builder": "nope"}).status_code == 400
-    assert client.post("/runs", data={"category": "stem", "builder": "llm"}).get_json()["status"] \
+    assert client.post("/runs", data={"category": "stem", "builder": "jev"}).get_json()["status"] \
         in ("running", "done")
     state = wait_for_job(client)
     assert seen == [(built, "STEM")]
     assert state["status"] == "done" and state["done"] == 2 and state["total"] == 2
-    assert state["builder"] == "llm" and state["folder"] == str(built) and "elapsed" in state
+    assert state["builder"] == "jev" and state["folder"] == str(built) and "elapsed" in state
     published = tmp_path / "out" / "stem_gpa.csv"
     assert state["published"] == str(published)
     assert published.read_text() == (built / "stem_gpa.csv").read_text()
 
 
 def test_a_failed_run_reports_its_error_and_publishes_nothing(client, monkeypatch, tmp_path,
-                                                              llm_builder):
+                                                              jev_builder):
     def fake_run(cfg, category, progress=None):
-        raise RunError("Cannot reach Ollama")
+        raise RunError("Cannot reach the gpa-tools cloud")
 
-    monkeypatch.setattr(llm_builder, "run", fake_run)
+    monkeypatch.setattr(jev_builder, "run", fake_run)
     client.post("/runs", data={"category": "STEM"})
     state = wait_for_job(client)
-    assert state == {**state, "status": "error", "error": "Cannot reach Ollama"}
+    assert state == {**state, "status": "error", "error": "Cannot reach the gpa-tools cloud"}
     assert not (tmp_path / "out").exists()
 
 
-def test_only_one_run_at_a_time(client, monkeypatch, folders, llm_builder):
+def test_only_one_run_at_a_time(client, monkeypatch, folders, jev_builder):
     release = threading.Event()
 
     def slow_run(cfg, category, progress=None):
         release.wait(5)
         return folders[0] / "stem_gpa.csv"
 
-    monkeypatch.setattr(llm_builder, "run", slow_run)
+    monkeypatch.setattr(jev_builder, "run", slow_run)
     assert client.post("/runs", data={"category": "STEM"}).status_code == 200
     r = client.post("/runs", data={"category": "STEM"})
     assert r.status_code == 409 and r.get_json()["status"] == "running"
