@@ -19,14 +19,11 @@ class FakeJev:
     def __init__(self):
         self.asked = []
 
-    def answers(self, state, questions):
-        letter = state["letter"]
+    def rank_letter(self, letter):
         self.asked.append(letter)
         if "boom" in letter:
             raise JevError("HTTP 500: down")
-        assert questions["rank"]["type"] == "choice"
-        choice = next(c for c in rank_letters.CRITERIA if c in letter)
-        return {"rank": {"type": "choice", "choice": choice, "confidence": 0.8}}
+        return next(c for c in rank_letters.CRITERIA if c in letter), 0.8
 
 
 def fake_pdftotext(pdf, work):
@@ -101,8 +98,8 @@ def test_rank_asks_one_choice_question():
 
 def test_rank_rejects_an_unknown_choice():
     class Odd(FakeJev):
-        def answers(self, state, questions):
-            return {"rank": {"choice": "superb"}}
+        def rank_letter(self, letter):
+            return "superb", 0.9
 
     with pytest.raises(JevError):
         rank_letters.rank(Odd(), "text")

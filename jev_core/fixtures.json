@@ -1,0 +1,71 @@
+{
+  "_comment": "What jev_core (Python) and jev_cloud/src/jev.js must build for these inputs; regenerate only when prompts.json changes on purpose.",
+  "course": {
+    "model": "jev-1.14.0",
+    "category": "STEM",
+    "definition": "Science and math.",
+    "courses": [
+      [
+        "MATH 101",
+        "Calculus I"
+      ],
+      [
+        "FREN 1",
+        "French"
+      ]
+    ],
+    "body": {
+      "model": "jev-1.14.0",
+      "state": {
+        "category": "STEM",
+        "definition": "Science and math.",
+        "course_01": "MATH 101 - Calculus I",
+        "course_02": "FREN 1 - French"
+      },
+      "questions": {
+        "q01": {
+          "type": "noul",
+          "instructions": "Using only `definition`, is the university course `course_01` in the category `category`?",
+          "criteria": {
+            "true": "The course's subject matter falls within the academic subjects the definition includes.",
+            "false": "The course's subject matter is outside the definition, or is one of the subjects the definition excludes."
+          }
+        },
+        "q02": {
+          "type": "noul",
+          "instructions": "Using only `definition`, is the university course `course_02` in the category `category`?",
+          "criteria": {
+            "true": "The course's subject matter falls within the academic subjects the definition includes.",
+            "false": "The course's subject matter is outside the definition, or is one of the subjects the definition excludes."
+          }
+        }
+      }
+    }
+  },
+  "course_key": {
+    "code": " math 101 ",
+    "title": " Calculus I ",
+    "key": "MATH 101|calculus i"
+  },
+  "letter": {
+    "model": "jev-1.14.0",
+    "letter": "Dear committee, ...",
+    "body": {
+      "model": "jev-1.14.0",
+      "state": {
+        "letter": "Dear committee, ..."
+      },
+      "questions": {
+        "rank": {
+          "type": "choice",
+          "instructions": "How strong a recommendation is this letter for the student it is about?",
+          "criteria": {
+            "excellent": "The writer gives an exceptional, unreserved endorsement backed by specific evidence: ranks the student among the very best they have known, with concrete achievements.",
+            "good": "A clearly positive, supportive endorsement with some specific evidence, but without placing the student at the very top.",
+            "normal": "A routine or lukewarm letter: generic praise, little specific evidence, or confirms facts more than it recommends."
+          }
+        }
+      }
+    }
+  }
+}

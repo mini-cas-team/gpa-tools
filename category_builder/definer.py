@@ -120,7 +120,7 @@ def draft(cfg: dict, category: str, only: str | None = None) -> Draft:
     """The definer's proposed definition for ``category``, with every attempt.
 
     ``only`` keeps just that step of the mode (to check one site by hand).
-    Nothing is saved to config.yaml; the attempts go to category_definer.log.
+    Nothing is saved; the attempts go to category_definer.log.
     DraftFailed (an OSError) when every step fails."""
     definer_cfg = load_config(cfg)
     if only:
@@ -152,14 +152,20 @@ def record(cfg: dict, category: str, attempts, source: str | None) -> None:
         pass  # the log is a convenience; the attempts also travel with the result
 
 
-def definition_for(config_path: Path, cfg: dict, category: str) -> tuple[str, bool]:
-    """The saved definition, drafting and saving one first if there is none.
+def definition_for(config_path: Path, cfg: dict, category: str) -> tuple[str, str]:
+    """``category``'s definition from the local repo, else the cloud's shared one, else
+    a new draft (offered to the cloud first; see definitions.py).
 
-    Returns (definition, drafted).
+    Returns (definition, how): how is "repo", "cloud" or "drafted".
     """
-    definitions = Definitions(config_path)
-    if category in definitions.data:
-        return definitions.data[category].strip(), False
-    definition = draft(cfg, category).definition
-    definitions.set(category, definition)
-    return definition, True
+    return Definitions(config_path).resolve(category, lambda: draft(cfg, category).definition)
+
+
+def describe_how(category: str, how: str, definition: str) -> str | None:
+    """The log line for where ``definition_for`` got a definition (None: the repo had it)."""
+    if how == "cloud":
+        return f"No local definition for {category}; copied the cloud's shared one:\n  {definition}"
+    if how == "drafted":
+        return (f"No definition for {category} locally or in the cloud; category-definer drafted "
+                f"one and it was saved (and offered to the cloud):\n  {definition}")
+    return None

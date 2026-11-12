@@ -6,10 +6,15 @@ category: `llm`, a local LLM (Ollama), or `jev`, TypeSafe's hosted model. A
 category's definition is drafted by `category-definer`, through ChatGPT's or
 Gemini's free web chat or the local LLM, and then edited by you.
 
+Everything runs on your machine (the **client**) except the calls to Jev, which
+go through the gpa-tools **cloud server** (`jev_cloud/`). The TypeSafe API key
+lives only there, and the server shares course scores between clients. See
+[Client and cloud server](#client-and-cloud-server).
+
 ```
 PDF ──► upload ──► work/<name>.common.json ──► category builder ──► work/<builder>/<cat>_gpa.csv ──► out_builder ──► out/<cat>_gpa.csv
         pdftotext   (gpa_4 per course)         llm: Ollama yes/no     work/<builder>/<cat>_courses.csv   (copy)          (public output)
-                                               jev: TypeSafe 0-1 score
+                                               jev: 0-1 score ◄──► cloud server ◄──► TypeSafe
                                                     ▲
                         category-definitions ───────┘  (drafted by category-definer: chatgpt / gemini / ollama)
 
@@ -85,7 +90,10 @@ category-builder:            # one section per builder
     category-definition-model: qwen2.5:7b  # category-definer's ollama step: as large as fits
     ollama-url: http://localhost:11434     # both models: any in `ollama list` there
   jev:
-    model: jev-1.14.0        # a version pins it; `jev-latest` follows new releases
+    mode: direct             # direct: TypeSafe with the key below; cloud: the gpa-tools cloud server holds it
+    cloud-url: ""            # mode cloud: https://gpa-tools-jev.<account>.workers.dev
+    cloud-token-env: GPA_TOOLS_CLOUD_TOKEN   # mode cloud: env var holding this client's token
+    model: jev-1.14.0        # mode direct only; a version pins it; `jev-latest` follows new releases
     api-url: https://api.typesafe.ai/v1/systemone
     api-key-env: GPA_TOOLS_KEY   # env var holding the TypeSafe API key; never the key itself
     threshold: 0.5           # in the category when Jev's score is above this
@@ -106,8 +114,7 @@ rank-ai:                     # View → Rank's Ask AI box
   # claude-model: claude-sonnet-5-5
   # claude-api-key-env: ANTHROPIC_API_KEY
 
-category-definitions:        # shared by every builder; drafted by category-definer, edit freely
-  STEM: STEM stands for Science, Technology, Engineering, and Mathematics. ...
+definitions-folder: /home/you/gpa/work/definitions   # one <CAT>.json per category (default <work-folder>/definitions)
 ```
 
 Each component has an input folder, which holds only what you supply, and a
@@ -164,11 +171,31 @@ Builders provide data, not a ranking: there is no rank column and no one is
 left out. Rank by sorting the View tab's columns, or however the application
 reading the CSV wants.
 
-**Definitions** are shared by every builder and kept in
-`category-definitions`. When a category has none, `category-definer` drafts
-one as a starting point and saves it; edit it before (re)building. Drafting
-is separate from building, so it uses its own sources: the web chats below,
-then the local `category-definition-model`.
+**Definitions** are shared by every builder and kept in the local definitions
+repo, `definitions-folder`: one `<CAT>.json` per category. A category gets its
+definition in this order:
+
+1. **The repo has it:** it's used.
+2. **The cloud has it:** the cloud's shared definition is copied into the repo.
+3. **Neither has it:** `category-definer` drafts one, and the draft is offered to
+   the cloud. The first client's draft becomes the shared definition for every
+   client and is never replaced. If another client shared one first, theirs is
+   used instead. If the cloud can't be reached, the draft is kept as this PC's
+   own and offered the next time it is used.
+
+The cloud's definition is the default, so every client sends the same text and
+shares the same Jev scores. Editing a definition (Update) makes it this PC's own:
+its courses are scored again, and those scores aren't shared. **Use cloud
+version** goes back to the shared text.
+
+When the folder doesn't exist yet (a new PC, or an upgrade), it is made. An
+older `config.yaml`'s `category-definitions:` section is moved into it and
+replaced by `definitions-folder:`. Every cloud definition is downloaded.
+
+The cloud is used only when `category-builder: jev:` is in `mode: cloud` with
+its token set. Otherwise the repo is all there is. Drafting is separate from
+building, so it uses its own sources: the web chats below, then the local
+`category-definition-model`.
 
 The definer's `mode` picks its steps. It moves on whenever a step fails or
 its reply has no usable definition, and ChatGPT and Gemini get one retry each
@@ -245,10 +272,27 @@ STEM, for restoring later.
 
 #### The jev builder
 
-Uses [TypeSafe](https://docs.typesafe.ai)'s hosted Jev model. Create an API
-key in the TypeSafe console (API Keys) and export it in the variable that
-`api-key-env` names, e.g. `export GPA_TOOLS_KEY=...` in `~/.bashrc`; the key
-never goes in config.yaml, which is in git.
+Uses [TypeSafe](https://docs.typesafe.ai)'s hosted Jev model, reached one of
+two ways (`mode`):
+
+- **cloud** (production): through the gpa-tools cloud server, `jev_cloud/`
+  (a Cloudflare Worker; see `jev_cloud/README.md`). The TypeSafe key lives
+  only there; this machine needs a client token from the server's admin, in
+  the variable `cloud-token-env` names (`export GPA_TOOLS_CLOUD_TOKEN=gpat_...`).
+  The server keeps every course score it has asked Jev for and shares it with
+  every client using the same definition, so a course one client paid for is
+  free for the rest. The questions are in `jev_core/prompts.json`; the server
+  chooses the model, and the local cache is stamped with it. A letter's text
+  passes through the server but is never stored.
+- **direct** (development): TypeSafe itself. Create an API key in the
+  TypeSafe console (API Keys) and export it in the variable that `api-key-env`
+  names, e.g. `export GPA_TOOLS_KEY=...` in `~/.bashrc`. `model` and
+  `api-url` apply only here.
+
+Neither the key nor the token ever goes in config.yaml, which is in git.
+`python -m jev_category.seed --category STEM [--definition]` uploads this
+machine's scores (and, with `--definition`, the definition) to the cloud's
+shared store; it needs the server's admin token in `GPA_TOOLS_CLOUD_ADMIN_TOKEN`.
 
 For every distinct course it asks one Noul question ("using only
 `definition`, is the course in the category?") and gets back the probability
@@ -263,6 +307,8 @@ The cache, `<work-folder>/jev/cache_<cat>.json`, works like the llm builder's
 (stamped with model and definition) but stores scores, so changing
 `threshold` needs no new API calls. The model is pinned to a version so
 cached scores and new ones come from the same model; change it on purpose.
+In cloud mode the server has a second, shared cache; see
+[When Jev is asked](#when-jev-is-asked).
 
 ### 3. out_builder: publish to out-folder
 
@@ -308,19 +354,21 @@ its own scroll bar.
   `<work-folder>/transcripts`, as with `python -m upload`.
 - *Right, Category Build:* an action bar of **Builder** and **Category** (dropdowns),
   **Update** and **Add**. Builder starts on `active-category-builder`. With no
-  `category-definitions`, only Add is shown.
-  - The dropdown shows the selected category's definition, read-only. It
-    starts on the first one in `config.yaml`.
+  definitions yet, only Add is shown.
+  - The dropdown shows the selected category's definition, read-only, and
+    whether it is *shared* (the cloud's) or *this PC's own*. An own one has a
+    **Use cloud version** button.
   - **Update** makes the definition editable, with **Go** and **Cancel**. Go
-    saves the text to `config.yaml` and runs the selected builder in the
+    saves the text to the repo and runs the selected builder in the
     background, with a progress bar and time left, then publishes the result
     to out-folder. When it finishes, the panel shows the definition the run
     used and an *Open in View* link.
-  - **Add** shows a **Name** box with **Go** and **Cancel**. Go asks
+  - **Add** shows a **Name** box with **Go** and **Cancel**. Go takes the
+    cloud's shared definition when it has one. Otherwise it asks
     category-definer for a draft (about a minute through ChatGPT or Gemini,
-    longer when it falls back; the progress line names the steps), saves it
-    to `config.yaml`, and switches to Update so you can edit it before
-    building. The result names who drafted it, and failed tries are listed
+    longer when it falls back; the progress line names the steps) and offers
+    it to the cloud. It saves the result to the repo and switches to Update
+    before building. The result names who drafted it, and failed tries are listed
     under it.
   - While Update or Add is active, the other button and the dropdown are
     disabled. One run at a time is allowed.
@@ -348,7 +396,7 @@ every PDF in `<input-folder>/letters`. A letter whose `<name>.txt` is already in
 again). New ones are saved in `<input-folder>/letters`; then, in the background
 with a progress bar, each becomes `<work-folder>/letters/<name>.txt` and Jev ranks it
 *excellent*, *good* or *normal* (one `choice` question per letter, using the
-`category-builder: jev:` model, URL and key). The ranks are merged into
+`category-builder: jev:` mode: the cloud server, or TypeSafe directly). The ranks are merged into
 `<work-folder>/letters/letter_ranks.csv` (`filename,rank,confidence`), replacing
 rows for the same file. One run at a time.
 
@@ -511,16 +559,152 @@ machine without a GPU a 7B model takes minutes to read the prompt; set
 configured folders, and Flask's development server is what `--host` binds;
 neither belongs on a network without authentication in front of it.
 
+## Client and cloud server
+
+In production gpa-tools runs in two places:
+
+| | Client (your machine) | Cloud server (`jev_cloud/`) |
+|---|---|---|
+| Runs | everything: upload, builders, letters, profiles, the web UI | only the Jev calls |
+| Code | Python (this repo, minus `jev_cloud/`) | JavaScript: plain Node now, a Cloudflare Worker later |
+| Secret | a client token (`~/.gpa-tools/client_token`) | the TypeSafe API key, and the admin token |
+| Keeps | transcripts, letters, profiles, every CSV, its own score cache | course scores shared by all clients, definitions, tokens, usage |
+
+`jev_core/prompts.json` holds the Jev questions. The server and the client's
+direct mode both use it, and tests on both sides check that they build the same
+request (`jev_core/fixtures.json`).
+
+### Running it
+
+For now the server runs locally on Node and keeps its data in a folder. Later it
+moves to Cloudflare with no code change: the same files go into R2 instead
+(`jev_cloud/README.md` has the deploy steps).
+
+```bash
+# terminal 1: the cloud server (http://127.0.0.1:8787, data in jev_cloud/data/)
+cd jev_cloud && npm start              # reads TYPESAFE_API_KEY and ADMIN_TOKEN from jev_cloud/.dev.vars
+
+# terminal 2: the client
+.venv/bin/python -m browser_view       # http://127.0.0.1:5001 (the laptop's token: below)
+```
+
+```yaml
+# config.yaml
+category-builder:
+  jev:
+    mode: cloud                        # direct: TypeSafe itself, with the key in api-key-env (development)
+    cloud-url: http://127.0.0.1:8787   # later https://gpa-tools-jev.<account>.workers.dev
+    cloud-token-env: GPA_TOOLS_CLOUD_TOKEN
+```
+
+`.venv/bin/python install/check.py --text` reports whether the server answers
+and accepts the token. Every jev build or letter ranking needs the server
+running. Without it, the run stops with "Cannot reach the gpa-tools cloud at
+...". To switch back, set `mode: direct`.
+
+### This laptop's token
+
+Each laptop has its own client token, kept in `~/.gpa-tools/` (folder `chmod 700`,
+files `600`; `GPA_TOOLS_HOME` moves it), never in the repo or `config.yaml`. The laptop
+makes the token itself, and the package owner approves it:
+
+```bash
+# on the laptop, at install
+.venv/bin/python -m jev_category.enroll request --email you@school.edu
+# on the owner's PC (needs GPA_TOOLS_CLOUD_ADMIN_TOKEN)
+.venv/bin/python -m jev_category.admin requests            # id, date, email, hostname
+.venv/bin/python -m jev_category.admin approve <id>        # or: reject <id>
+.venv/bin/python -m jev_category.admin revoke <email>:<hostname>
+```
+
+- **At install,** `request` makes a random token and saves it in
+  `~/.gpa-tools/pending_token`. It sends the server only the token's sha256, the
+  email and the hostname, and saves what it sent in `request.json`.
+- **Every time gpa-tools starts** (the web UI, a build, a letter ranking):
+  - If `client_token` is not empty, it is used.
+  - Otherwise gpa-tools asks the server about the request, looked up by the hash, so
+    only this laptop can ask. Once the request is approved, `pending_token` becomes
+    `client_token`.
+  - Until then, the web UI prints a NOTICE and jev runs stop with "No gpa-tools cloud
+    token on this laptop: … Contact the package owner to approve <email>:<hostname>."
+- **The token never leaves the laptop.** No token is emailed or copied.
+- **A revoked laptop** (a 401) asks again with `request --new --email …`. Approving
+  the new request also revokes the laptop's old token.
+- **For testing,** `GPA_TOOLS_CLOUD_TOKEN` (the variable `cloud-token-env` names) wins
+  over the files.
+
+`enroll status` prints `pending`, `approved` or `rejected`, and
+`install/check.py --text` shows where the token comes from.
+
+### What is sent: building a category GPA
+
+Only course codes, course titles and the category definition leave the machine.
+Student names, grades, credits and GPAs never do; the GPA is computed locally.
+
+| Request (each with `Authorization: Bearer <client token>`) | When | Sends | Gets back |
+|---|---|---|---|
+| `GET /v1/info` | once per build | nothing | the Jev model, which stamps the local cache |
+| `GET /v1/definitions` | once, when the definitions repo is made | nothing | every shared definition |
+| `GET /v1/definitions/<CAT>` | only when the repo has no definition | nothing | the shared definition (saved to the repo), else 404 |
+| `POST /v1/definitions/<CAT>` | after a new draft | `definition` | the shared one: this draft when it was first (`created: true`), else the earlier client's |
+| `POST /v1/courses/score` | for courses not in the local cache, `batch-size` (20) per request | `category`, `definition`, `courses: [[code, title], ...]` | `scores` in the same order, and `usage`: `cached`, `asked`, tokens |
+
+### What is kept where
+
+| File | Where | Holds |
+|---|---|---|
+| `<work>/definitions/<CAT>.json` | client | the definitions repo: text, `origin` (cloud or this PC's own), `pending` |
+| `<work>/jev/cache_<cat>.json` | client | scores for the courses on this machine's transcripts |
+| `<work>/jev/<cat>_courses.csv` | client | every course of every student, with `is_<cat>` and its score |
+| `<work>/jev/<cat>_gpa.csv` | client | one row per student: category GPA, all-courses GPA, counts, % (published to out-folder) |
+| `<work>/letters/<name>.txt`, `letter_ranks.csv` | client | letter text, and each letter's rank and confidence |
+| `scores/<model>/<CAT>/<sha256(definition)[:16]>.json` | server | the same `"CODE\|title": score` map, from all clients |
+| `definitions/<CAT>.json`, `tokens.json`, `usage/<day>/<token hash>.json` | server | shared definitions (the first client's, never replaced), token hashes, daily Jev questions per token |
+
+The server's files are under `jev_cloud/data/` (git-ignored) now, and in R2 once
+it is deployed.
+
+### When Jev is asked
+
+When you click Go in Category Build (or run `python -m jev_category`):
+
+1. **Client:** opens `cache_<cat>.json`. It is stamped with the server's model
+   and the definition; a cache from another model or definition is discarded. A
+   missing cache counts as empty.
+2. **Client:** sends only the courses that are not in it to the server, and saves
+   each batch's scores to the cache. The next build sends nothing.
+3. **Server:** finds the score file for this model, category and definition
+   (a changed definition is a different file, so a different question). It looks
+   each course up as `CODE|title`.
+4. **Server:** asks Jev only for the courses that no client has scored yet, after
+   counting them against the token's daily limit. It saves the new scores, then
+   answers with all of them. When Jev fails, nothing is saved, and the build
+   stops with the error.
+
+So a course is paid for once, by whichever client meets it first. A new machine
+with no cache builds from the server's scores at no cost. Seed the server from a
+machine that already has caches with
+`python -m jev_category.seed --category STEM --definition`, using the admin token.
+
+### Letters
+
+Recommendations → Upload converts each new letter to `<work>/letters/<name>.txt`
+and sends its full text to the server (`POST /v1/letters/rank` → `{choice,
+confidence}`), one letter per request. The server asks Jev and saves nothing: no
+letter text, no rank. It logs only the letter's length. The ranks are merged into
+`<work>/letters/letter_ranks.csv` on the client. A letter whose `.txt` already
+exists is not sent again; delete the `.txt` to re-rank it.
+
 ## Layout
 
 ```
-config.yaml       folders, builders, definer, category definitions
+config.yaml       folders, builders, definer, definitions-folder
 folders.py        input-folder / work-folder per component (transcripts, letters, personal)
 upload/           PDF -> .txt + .common.json (python -m upload)
   common/         txt2common, add_gpa, label and grade-scale tables
 category_builder/ builder registry and CLI (python -m category_builder)
   common.py       reading .common.json, writing <cat>_gpa.csv and <cat>_courses.csv
-  definitions.py  category-definitions in config.yaml
+  definitions.py  the local definitions repo, kept in step with the cloud's
   definer.py      category-definer: modes, steps, retries and log
 category_definition_builder/  drafts a definition via ChatGPT/Gemini in a browser
                   (python -m category_definition_builder STEM)
@@ -532,10 +716,13 @@ llm_category/     the llm builder (python -m llm_category)
   builder.py      load_config / run / estimate
   llm.py          the Ollama prompts
   store.py        answer cache
+jev_core/         the Jev questions (prompts.json) and request format, shared with jev_cloud
 jev_category/     the jev builder (python -m jev_category)
-  builder.py      load_config / run / estimate
-  client.py       TypeSafe API client
+  builder.py      load_config / run / estimate; client(cfg) picks cloud or direct
+  client.py       CloudClient (the cloud server) and JevClient (TypeSafe, direct mode)
   store.py        score cache
+  seed.py         upload local scores to the cloud's shared store
+jev_cloud/        the cloud server (JavaScript; local Node + folder now, Cloudflare Worker + R2 later; see its README)
 out_builder/      publish <cat>_gpa.csv to out-folder (python -m out_builder)
 letter_builder/   recommendation letters: pdf2txt, then rank_letters with Jev
 browser_view/     Flask UI: transcript and letter pages (python -m browser_view)
@@ -552,13 +739,59 @@ tests/
 ```
 
 The tests need neither Ollama, pdftotext, a browser nor TypeSafe: all are
-replaced by fakes. They cover transcript conversion and GPA, the builder
+replaced by fakes. The cloud server has its own, run with Node 22.5+ and no
+npm install (R2 and TypeSafe are faked):
+`cd jev_cloud && npm test`. They cover transcript conversion and GPA, the builder
 registry and CSV output, both builders and their caches, definitions, the
 definer's modes and attempt log, reply parsing, which model does which job,
 publishing, every browser_view route, and the installer's config editing and
 model choice.
 
 ## Changes
+
+### 2026-11-11: laptops ask for their own cloud token
+
+- **New token home.** A laptop's token now lives in `~/.gpa-tools/client_token`, not
+  only in an environment variable. The laptop makes it and asks for approval
+  (`python -m jev_category.enroll request --email …`), and the owner approves with
+  `python -m jev_category.admin approve <id>`. The token is picked up on the next start.
+- **New server data.** The cloud server has `/v1/requests` endpoints and a `requests.json`
+  file. Deploy the server again before laptops use them.
+
+### 2026-11-10: definitions repo, shared through the cloud
+
+- **Definitions moved.** They now live in a local repo, `definitions-folder`
+  (default `<work-folder>/definitions`), one `<CAT>.json` each. On first use,
+  config.yaml's `category-definitions:` section is moved there and replaced by
+  `definitions-folder:`.
+- **Lookup order.** A missing category is taken from the cloud first. Only when
+  the cloud has none does category-definer draft it.
+- **The first draft is shared.** It becomes the shared definition (create-only on
+  the server, so it is never replaced), and a later client's draft gives way to it.
+- **Local overrides.** Editing a definition makes it this PC's own. *Use cloud
+  version* undoes that.
+- **Server.** Adds `GET /v1/definitions` and `POST /v1/definitions/<CAT>`
+  (clients, create-only). The admin `PUT` was removed, and
+  `jev_category.seed --definition` now offers the definition create-only.
+
+### 2026-11-09: client and cloud server
+
+The Jev calls moved behind a cloud server, so the TypeSafe API key no longer has
+to be on a client machine.
+
+- New `jev_core/`: the Jev questions (`prompts.json`) and request format, shared
+  by both sides.
+- New `jev_cloud/`: the server. It runs locally with `npm start` (data in
+  `jev_cloud/data/`), and on Cloudflare (Worker + R2) later.
+- `category-builder: jev:` gains `mode` (`cloud` | `direct`), `cloud-url` and
+  `cloud-token-env`. `model` and `api-url` now apply only to `direct`.
+- The jev builder and letter ranking use whichever mode is set. In cloud mode the
+  local cache is stamped with the server's model, and a category with no
+  definition takes the server's shared one.
+- `python -m jev_category.seed` uploads local scores to the server.
+  `install/check.py` checks the server and the token.
+- Fixed: Upload → Category Build stayed on "Loading…". The page's script stopped
+  on a missing `header.top`, which only pages with a heading have.
 
 ### 2026-11-08: input and work folders per component
 

@@ -122,13 +122,12 @@ def run(cfg: dict, category: str, limit: int | None = None, progress=None) -> Pa
 
     client = OllamaClient(cfg["url"], cfg["model"])
     try:
-        definition, drafted = definer.definition_for(cfg["config"], cfg["raw"], category)
+        definition, how = definer.definition_for(cfg["config"], cfg["raw"], category)
     except OSError as exc:  # drafting a missing definition runs category-definer's steps
         raise RunError(f"No definition for {category} and category-definer "
                        f"({definer.describe(definer.load_config(cfg['raw']))}) failed: {exc}") from None
-    if drafted:
-        log.info("No definition for %s; category-definer drafted one and it was saved "
-                 "to %s:\n  %s", category, cfg["config"], definition)
+    if note := definer.describe_how(category, how, definition):
+        log.info("%s", note)
     try:
         cache = _cache(cfg, category, definition)
         if cache.reset:

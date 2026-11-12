@@ -104,3 +104,12 @@ def no_browser(monkeypatch):
     for step in definer.BROWSER_STEPS:
         monkeypatch.setitem(definer.PROVIDERS, step, NoBrowser)
     monkeypatch.setitem(definer.PROVIDERS, "ollama", NoOllama)
+
+
+@pytest.fixture(autouse=True)
+def gpa_tools_home(tmp_path, monkeypatch):
+    """~/.gpa-tools (this laptop's cloud token) is a temporary folder: no test reads or
+    writes the real one."""
+    home = tmp_path / "gpa-tools-home"
+    monkeypatch.setenv("GPA_TOOLS_HOME", str(home))
+    return home

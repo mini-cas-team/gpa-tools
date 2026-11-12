@@ -5,7 +5,7 @@
 Upload > Transcripts converts uploaded PDFs (saved in <input-folder>/transcripts,
 or every PDF already there) to <name>.txt and <name>.common.json (with per-course
 GPA) in <work-folder>/transcripts -- the input every category builder reads.  A
-Category Build panel beside it lists config.yaml's category-definitions and adds
+Category Build panel beside it lists the local definitions repo and adds
 a category: category-definer drafts a definition, the operator edits and
 saves it, and after a time estimate the selected builder runs on it in the
 background; out_builder then publishes the result to out-folder.  View reads
@@ -411,18 +411,21 @@ def create_app(config_path: Path | None = None) -> Flask:
 
     @app.get("/categories")
     def list_categories():
-        """{name: definition} from config.yaml's category-definitions section.
+        """{name: definition} from the local definitions repo, with each one's origin
+        (cloud: the shared text; local: this PC's own).
 
-        ``names`` keeps the file's order (jsonify sorts the object's keys).
+        ``names`` keeps the repo's order (jsonify sorts the object's keys).
         """
         try:
-            data = Definitions(config_path).data
+            definitions = Definitions(config_path)
+            data = definitions.data
             cfg = _load_config(config_path)
             try:
                 steps = definer.step_names(definer.load_config(cfg))
             except ValueError:
                 steps = []  # a bad mode: the draft request reports it
-            return jsonify(categories=data, names=list(data), path=str(config_path),
+            return jsonify(categories=data, names=list(data), path=str(definitions.folder),
+                           origins={c: definitions.origin(c) for c in data},
                            builders=category_builder.names(),
                            active_builder=category_builder.active(cfg), definer=steps)
         except (OSError, yaml.YAMLError) as exc:
@@ -430,13 +433,18 @@ def create_app(config_path: Path | None = None) -> Flask:
 
     @app.post("/categories/draft")
     def draft_category():
-        """category-definer's proposed definition for a new category. Nothing is saved."""
+        """A definition for a new category: the cloud's shared one when it has one
+        (source "cloud"), else category-definer's draft. Nothing is saved."""
         try:
             name = category_name(request.form.get("name"))
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
-        if name in Definitions(config_path).data:
+        definitions = Definitions(config_path)
+        if name in definitions.data:
             return jsonify(error=f"{name} is already defined"), 409
+        shared = definitions.cloud_definition(name)
+        if shared is not None:
+            return jsonify(name=name, definition=shared, source="cloud", attempts=[])
         cfg = _load_config(config_path)
         try:
             definer.load_config(cfg)
@@ -453,9 +461,11 @@ def create_app(config_path: Path | None = None) -> Flask:
 
     @app.post("/categories")
     def save_category():
-        """Save a (possibly edited) definition into config.yaml.
+        """Save a definition into the local definitions repo.
 
-        A new name unless ``replace=1`` (Update), which needs an existing one.
+        A new name (offered to the cloud, whose shared text wins; ``shared`` says
+        created, adopted or pending) unless ``replace=1`` (Update, an existing one:
+        a local override unless it equals the cloud's text).
         """
         try:
             name = category_name(request.form.get("name"))
@@ -471,11 +481,27 @@ def create_app(config_path: Path | None = None) -> Flask:
         if not replace and name in definitions.data:
             return jsonify(error=f"{name} is already defined"), 409
         try:
-            definitions.set(name, definition)
-        except (OSError, ValueError, yaml.YAMLError) as exc:
-            return jsonify(error=f"could not save to {config_path}: {exc}"), 500
-        log.info("category %s saved to %s", name, config_path)
-        return jsonify(name=name, categories=definitions.data)
+            entry = definitions.update(name, definition) if replace \
+                else definitions.publish(name, definition)
+        except (OSError, ValueError) as exc:
+            return jsonify(error=f"could not save to {definitions.folder}: {exc}"), 500
+        log.info("category %s saved to %s (%s)", name, definitions.folder, entry["origin"])
+        return jsonify(name=name, categories=definitions.data, origin=entry["origin"],
+                       shared=entry.get("shared"), definition=entry["definition"])
+
+    @app.post("/categories/use-cloud")
+    def use_cloud_category():
+        """Replace this PC's definition of a category with the cloud's shared one."""
+        try:
+            name = category_name(request.form.get("name"))
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        definitions = Definitions(config_path)
+        entry = definitions.use_cloud(name)
+        if entry is None:
+            return jsonify(error=f"the cloud has no {name} definition (or cannot be reached)"), 404
+        return jsonify(name=name, categories=definitions.data, origin="cloud",
+                       definition=entry["definition"])
 
     def chosen_builder(raw: str | None):
         """(name, module, its config) for the builder a request names, else the active one."""
@@ -1050,6 +1076,21 @@ def setup_logging(cfg: dict) -> Path:
     return path
 
 
+def _cloud_token_notice(config_path: Path) -> None:
+    """At start, in cloud mode: pick up an approved token (jev_category.enroll), or print
+    the notice that this laptop has none yet.  The UI still starts either way."""
+    from jev_category import builder as jev_builder
+
+    try:
+        cfg = jev_builder.jev_settings(yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {})
+        if cfg["mode"] == "cloud" and cfg["cloud_url"]:
+            jev_builder.cloud_token(cfg)
+    except RunError as exc:
+        print(f"NOTICE: {exc}")
+    except (OSError, ValueError):
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
@@ -1061,6 +1102,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     log_path = setup_logging(_load_config(args.config))
+    _cloud_token_notice(args.config)
     app = create_app(args.config)
     print(f"Browser View on http://{args.host}:{args.port} (log: {log_path})")
     app.run(host=args.host, port=args.port, debug=args.debug)

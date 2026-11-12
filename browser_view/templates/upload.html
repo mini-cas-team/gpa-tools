@@ -47,13 +47,16 @@
 
   <!-- Under the bar: one of view / update / add, then progress while busy. -->
   <p class="panel definition" id="category-definition">Loading…</p>
+  <p class="hint" id="category-origin" hidden><span id="category-origin-text"></span>
+    <button type="button" id="category-use-cloud" class="secondary" hidden>Use cloud version</button></p>
 
   <form id="category-update-form" hidden>
     <label for="category-text">Definition of <span id="category-update-name"></span></label>
     <textarea id="category-text" name="definition" rows="9" required></textarea>
-    <p class="hint">Go saves the definition to config.yaml and runs the selected builder
+    <p class="hint">Go saves the definition and runs the selected builder
       on every student in <code>&lt;work-folder&gt;/transcripts</code>, in the background; the result is then
-      published to out-folder.</p>
+      published to out-folder. A changed definition is this PC's own: its courses are
+      scored again, and those scores are not shared with other clients.</p>
     <div class="dialog-actions">
       <button type="submit" id="category-update-go">Go</button>
       <button type="button" id="category-update-cancel" class="secondary">Cancel</button>
@@ -76,8 +79,10 @@
     <p class="hint" id="category-progress-text"></p>
   </div>
 
-  <p class="hint">Definitions live in <code id="category-path">config.yaml</code>
-    (<code>category-definitions</code>). A hand edit there shows after a page reload.</p>
+  <p class="hint">Definitions live in <code id="category-path"></code>, one
+    <code>&lt;CAT&gt;.json</code> each (<code>definitions-folder</code> in config.yaml). A new
+    category is taken from the cloud when it has one; otherwise category-definer drafts it and
+    the draft becomes the shared one.</p>
 </fieldset>
 <div id="category-status" class="status" role="status" aria-live="polite" hidden></div>
 </section>
@@ -93,7 +98,9 @@
   };
   fit();
   window.addEventListener("resize", fit);
-  new ResizeObserver(fit).observe(document.querySelector("header.top"));
+  // header.top only on pages with a heading (base.html); else the spacer stands in.
+  const top = document.querySelector("header.top, .top-space");
+  if (top) new ResizeObserver(fit).observe(top);
 })();
 
 (() => {
@@ -173,7 +180,7 @@
   const addForm = $("category-add-form"), nameInput = $("category-name");
   const progressBox = $("category-progress"), bar = $("category-progress-bar");
   const progressText = $("category-progress-text"), status = $("category-status");
-  let categories = {}, names = [], definerSteps = [];
+  let categories = {}, names = [], definerSteps = [], origins = {};
   let poller = null;
   let action = null;  // the active button: "update", "add" or none
 
@@ -252,16 +259,23 @@
     const empty = !names.length;
     select.hidden = updateButton.hidden = empty;
     select.replaceChildren(...names.map((name) => new Option(name, name)));
-    // The first category in config.yaml unless one is asked for.
+    // The first category unless one is asked for.
     if (selected && names.includes(selected)) select.value = selected;
     definitionBox.textContent = empty
-      ? "No categories yet. Use Add to have category-definer draft one."
+      ? "No categories yet. Use Add to take one from the cloud or have category-definer draft one."
       : categories[select.value];
+    const origin = empty ? null : origins[select.value];
+    $("category-origin").hidden = !origin;
+    $("category-origin-text").textContent = origin === "cloud"
+      ? "Shared: the cloud's definition, so its scores are shared with other clients."
+      : "This PC's own definition (not the cloud's shared one): its scores are not shared.";
+    $("category-use-cloud").hidden = origin !== "local";
   }
 
   async function load(selected) {
     const data = await call("/categories");
     categories = data.categories || {};
+    origins = data.origins || {};
     names = data.names || Object.keys(categories);
     definerSteps = data.definer || [];
     $("category-path").textContent = data.path;
@@ -275,6 +289,16 @@
   }
 
   select.addEventListener("change", () => { render(select.value); setMode("view"); });
+  $("category-use-cloud").addEventListener("click", async () => {
+    const name = select.value;
+    try {
+      await call("/categories/use-cloud", post({ name }));
+      await load(name);
+      showStatus("ok", `${name} now uses the cloud's shared definition.`);
+    } catch (err) {
+      showStatus("error", `Error: ${err.message}`);
+    }
+  });
   updateButton.addEventListener("click", () => setMode(updateForm.hidden ? "update" : "view"));
   addButton.addEventListener("click", () => {
     if (addForm.hidden) { addForm.reset(); setMode("add"); } else { setMode("view"); }
@@ -297,11 +321,15 @@
     const timer = setInterval(tick, 1000);
     try {
       const draft = await call("/categories/draft", post({ name }));
-      await call("/categories", post({ name: draft.name, definition: draft.definition }));
+      const saved = await call("/categories", post({ name: draft.name, definition: draft.definition }));
       await load(draft.name);
       const failed = draft.attempts.filter((a) => a.error !== null);
-      showStatus("ok", [`${draft.name} drafted by ${draft.source} and saved to config.yaml. ` +
-        `Edit it if needed, then Go to run the ${builderSelect.value} builder on it.`,
+      const how = draft.source === "cloud" ? "taken from the cloud (the shared definition)"
+        : saved.shared === "created" ? `drafted by ${draft.source} and shared with the cloud`
+        : saved.shared === "adopted" ? `drafted by ${draft.source}, but another client shared one first; using theirs`
+        : `drafted by ${draft.source}; the cloud could not be reached, so it is shared later`;
+      showStatus("ok", [`${draft.name} ${how}. ` +
+        `Go runs the ${builderSelect.value} builder on it.`,
         ...(failed.length ? [attemptList(draft.attempts)] : [])]);
       setMode("update");
     } catch (err) {

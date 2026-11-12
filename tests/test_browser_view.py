@@ -2,6 +2,9 @@ import io
 import threading
 import time
 
+import json
+from pathlib import Path
+
 import pytest
 
 import browser_view.app as app_module
@@ -319,15 +322,19 @@ def fake_llm(monkeypatch):
     return llm
 
 
-def test_categories_list_config_definitions_in_file_order(client, folders):
+def test_categories_list_the_definitions_repo(client, folders):
+    """config.yaml's old category-definitions section is moved into the repo folder."""
     data = client.get("/categories").get_json()
+    repo = Path(data["path"])
     assert data == {"categories": {"STEM": "Science and maths."}, "names": ["STEM"],
-                    "path": str(folders[1]), "builders": ["llm", "jev"], "active_builder": "llm",
+                    "path": str(repo), "origins": {"STEM": "local"},
+                    "builders": ["llm", "jev"], "active_builder": "llm",
                     "definer": ["chatgpt (window)", "gemini (window)", "ollama"]}
-    config = folders[1]
-    config.write_text(config.read_text().replace(
-        "  STEM: Science and maths.\n", "  ZOO: Animals.\n  STEM: Science and maths.\n"))
-    assert client.get("/categories").get_json()["names"] == ["ZOO", "STEM"]
+    assert (repo / "STEM.json").exists()
+    text = folders[1].read_text()
+    assert "category-definitions" not in text and f"definitions-folder: {repo}" in text
+    (repo / "ZOO.json").write_text('{"category": "ZOO", "definition": "Animals.", "origin": "local"}')
+    assert client.get("/categories").get_json()["names"] == ["STEM", "ZOO"]
 
 
 def test_draft_falls_back_to_the_llm_without_saving(client, fake_llm, folders):
@@ -363,23 +370,30 @@ def test_draft_rejects_an_unknown_definer_mode(client, folders):
     assert client.get("/categories").get_json()["definer"] == []
 
 
-def test_save_writes_only_the_definitions_section(client, folders):
+def test_save_writes_the_repo_and_leaves_config_alone(client, folders):
     config = folders[1]
+    before = client.get("/categories").get_json()  # the first read moves the old section
+    text = config.read_text()
     r = client.post("/categories", data={"name": "business",
                                          "definition": "  Edited: management, finance.  "})
-    assert r.get_json()["categories"] == {"STEM": "Science and maths.",
-                                          "BUSINESS": "Edited: management, finance."}
-    text = config.read_text()
+    body = r.get_json()
+    assert body["categories"] == {"STEM": "Science and maths.",
+                                  "BUSINESS": "Edited: management, finance."}
+    # No cloud in this config: kept as this PC's own, offered to the cloud later.
+    assert (body["origin"], body["shared"]) == ("local", "pending")
+    assert config.read_text() == text
     assert text.startswith("# my settings\ninput-folder:")
     assert "log-folder: /nowhere  # keep me" in text
-    assert "BUSINESS: 'Edited: management, finance.'" in text
+    saved = json.loads((Path(before["path"]) / "BUSINESS.json").read_text())
+    assert saved["definition"] == "Edited: management, finance." and saved["pending"] is True
 
 
 def test_replace_needs_an_existing_category(client, folders):
     r = client.post("/categories", data={"name": "stem", "definition": "Edited.", "replace": "1"})
     assert r.get_json()["categories"] == {"STEM": "Edited."}
     r = client.post("/categories", data={"name": "LAW", "definition": "Law.", "replace": "1"})
-    assert r.status_code == 404 and "LAW" not in folders[1].read_text()
+    repo = Path(client.get("/categories").get_json()["path"])
+    assert r.status_code == 404 and not (repo / "LAW.json").exists()
 
 
 @pytest.mark.parametrize("path, form, status", [

@@ -64,6 +64,7 @@ def test_load_config_defaults_and_overrides(tmp_path):
     assert cfg["in"].as_posix() == "/w/transcripts" and cfg["folder"].as_posix() == "/w/jev"
     assert (cfg["model"], cfg["url"], cfg["key_env"], cfg["threshold"], cfg["batch_size"]) == (
         "jev-1.14.0", "https://api.typesafe.ai/v1/systemone", "GPA_TOOLS_KEY", 0.5, 20)
+    assert (cfg["mode"], cfg["cloud_url"], cfg["token_env"]) == ("direct", "", "GPA_TOOLS_CLOUD_TOKEN")
     config.write_text("work-folder: /w\ncategory-builder:\n  jev:\n    model: jev-latest\n"
                       "    api-url: http://h/v1\n    threshold: 0.7\n    batch-size: 5\n",
                       encoding="utf-8")

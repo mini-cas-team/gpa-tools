@@ -1,0 +1,25 @@
+{
+  "_comment": "The Jev questions, shared by the cloud server (jev_cloud, JavaScript) and the client's direct mode (jev_core, Python). Change them here only; tests on both sides check jev_core/fixtures.json.",
+  "courses": {
+    "instructions": "Using only `definition`, is the university course `{key}` in the category `category`?",
+    "criteria": {
+      "true": "The course's subject matter falls within the academic subjects the definition includes.",
+      "false": "The course's subject matter is outside the definition, or is one of the subjects the definition excludes."
+    }
+  },
+  "letters": {
+    "instructions": "How strong a recommendation is this letter for the student it is about?",
+    "criteria": {
+      "excellent": "The writer gives an exceptional, unreserved endorsement backed by specific evidence: ranks the student among the very best they have known, with concrete achievements.",
+      "good": "A clearly positive, supportive endorsement with some specific evidence, but without placing the student at the very top.",
+      "normal": "A routine or lukewarm letter: generic praise, little specific evidence, or confirms facts more than it recommends."
+    }
+  },
+  "limits": {
+    "max_courses": 50,
+    "max_category_chars": 64,
+    "max_definition_chars": 4000,
+    "max_course_chars": 300,
+    "max_letter_chars": 60000
+  }
+}

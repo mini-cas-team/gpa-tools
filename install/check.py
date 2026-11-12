@@ -28,7 +28,8 @@ DEFAULT_OLLAMA_URL = "http://localhost:11434"
 # The jev builder's defaults (jev_category/builder.py DEFAULTS; repeated here
 # because this file must run before the venv and PyYAML exist).
 JEV_DEFAULTS = {"model": "jev-1.14.0", "api-url": "https://api.typesafe.ai/v1/systemone",
-                "api-key-env": "GPA_TOOLS_KEY"}
+                "api-key-env": "GPA_TOOLS_KEY", "mode": "direct", "cloud-url": "",
+                "cloud-token-env": "GPA_TOOLS_CLOUD_TOKEN"}
 # The Pythons gpa-tools runs on, preferred first (a venv of either works).
 PYTHON_SUPPORTED = ((3, 14), (3, 12))
 
@@ -380,10 +381,53 @@ def jev_model_ok(model: str, listed: list[str]) -> bool:
     return model in listed or bool(re.fullmatch(r"jev-\d+\.\d+\.\d+", model or ""))
 
 
+def probe_cloud(cloud_url: str, token: str, timeout: float = 10) -> dict:
+    """Whether the gpa-tools cloud server (jev_cloud) answers and accepts the
+    client token; the Jev model it uses.  /v1/info asks Jev nothing (free)."""
+    url = cloud_url.rstrip("/") + "/v1/info"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}",
+                                               "User-Agent": "gpa-tools"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            reply = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        return {"url": url, "reachable": True, "authorized": exc.code not in (401, 403),
+                "error": f"HTTP {exc.code} {exc.reason}"}
+    except (OSError, ValueError) as exc:
+        return {"url": url, "reachable": False, "error": str(getattr(exc, "reason", exc))}
+    return {"url": url, "reachable": True, "authorized": True, "model": reply.get("model")}
+
+
+def cloud_token_here(env: str) -> tuple[str, str]:
+    """(this laptop's client token, where it came from): $env, else ~/.gpa-tools/client_token
+    (GPA_TOOLS_HOME), else ("", "pending ..." | "none").  Never prints the value."""
+    if os.environ.get(env, "").strip():
+        return os.environ[env].strip(), f"${env}"
+    home = Path(os.environ.get("GPA_TOOLS_HOME") or Path.home() / ".gpa-tools").expanduser()
+    try:
+        token = (home / "client_token").read_text(encoding="utf-8").strip()
+    except OSError:
+        token = ""
+    if token:
+        return token, str(home / "client_token")
+    if (home / "pending_token").exists():
+        return "", "requested, waiting for approval (python -m jev_category.enroll status)"
+    return "", "none (python -m jev_category.enroll request --email <you>)"
+
+
 def jev_info(config: dict) -> dict:
-    """The jev builder's settings, whether its key variable is set (never its
-    value), and, when it is, whether the API accepts it and knows the model."""
+    """The jev builder's settings, whether its key (direct mode) or client token
+    (cloud mode) variable is set (never its value), and, when it is, whether the
+    API or cloud server accepts it."""
     s = jev_settings(config)
+    if str(s["mode"]).strip().lower() == "cloud":
+        env = s["cloud-token-env"]
+        token, where = cloud_token_here(env)
+        info = {"mode": "cloud", "cloud-url": s["cloud-url"], "cloud-token-env": env,
+                "token_set": bool(token), "token_from": where}
+        if token and s["cloud-url"]:
+            info["cloud"] = probe_cloud(s["cloud-url"], token)
+        return info
     info = {"model": s["model"], "api-url": s["api-url"], "api-key-env": s["api-key-env"],
             "key_set": bool(os.environ.get(s["api-key-env"], "").strip())}
     if info["key_set"]:
@@ -547,6 +591,25 @@ def as_text(r: dict) -> str:
                  f"at {d['ollama-url']}; "
                  f"retries {d['retries']}; browser {d['browser']}")
     j = r["jev"]
+    if j.get("mode") == "cloud":
+        jev = (f"  jev: cloud at {j['cloud-url'] or 'NO cloud-url SET'}"
+               f"; token: {j.get('token_from') or ('set' if j['token_set'] else 'not set')}")
+        cloud = j.get("cloud")
+        if cloud:
+            jev += (f"; server accepts the token, Jev model {cloud['model']}" if "model" in cloud
+                    else f"; server: {cloud['error']}")
+        lines.append(jev)
+    else:
+        lines.append(_jev_direct_line(j, c))
+    for key, instead in c["outdated"].items():
+        lines.append(f"  OUTDATED: '{key}:' is from an older config.yaml; use {instead}")
+    for key in ("input-folder", "work-folder", "out-folder", "log-folder"):
+        if key in c:
+            lines.append(f"  {key}: {c[key]['value']}" + ("" if c[key]["exists"] else "  (does not exist)"))
+    return "\n".join(lines)
+
+
+def _jev_direct_line(j: dict, c: dict) -> str:
     jev = (f"  jev: {j['model']}" + ("" if c["jev-configured"] else " (default; no category-builder: jev: section)")
            + f"; key in ${j['api-key-env']}: {'set' if j['key_set'] else 'not set'}")
     api = j.get("api")
@@ -556,13 +619,7 @@ def as_text(r: dict) -> str:
             jev += "" if j["model_ok"] else f"; MODEL {j['model']} NOT ACCEPTED"
         else:
             jev += f"; API: {api['error']}"
-    lines.append(jev)
-    for key, instead in c["outdated"].items():
-        lines.append(f"  OUTDATED: '{key}:' is from an older config.yaml; use {instead}")
-    for key in ("input-folder", "work-folder", "out-folder", "log-folder"):
-        if key in c:
-            lines.append(f"  {key}: {c[key]['value']}" + ("" if c[key]["exists"] else "  (does not exist)"))
-    return "\n".join(lines)
+    return jev
 
 
 def main(argv=None) -> int:

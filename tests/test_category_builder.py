@@ -49,19 +49,109 @@ def test_weighted_gpa():
     assert common.weighted_gpa([]) is None
 
 
-def test_definitions_rewrite_only_their_section(tmp_path):
+class FakeCloud:
+    """The cloud's definition calls: create-only, like jev_cloud."""
+
+    def __init__(self, shared=None, down=False):
+        self.shared = dict(shared or {})
+        self.down = down
+        self.created = []
+
+    def _check(self):
+        if self.down:
+            raise OSError("cloud unreachable")
+
+    def definitions(self):
+        self._check()
+        return dict(self.shared)
+
+    def definition(self, category):
+        self._check()
+        return self.shared.get(category)
+
+    def create_definition(self, category, definition):
+        self._check()
+        if category in self.shared:
+            return {"category": category, "definition": self.shared[category], "created": False}
+        self.shared[category] = definition
+        self.created.append(category)
+        return {"category": category, "definition": definition, "created": True}
+
+
+def _config(tmp_path, text="# top\na: 1 # keep\ncategory-definitions:\n  STEM: Old.\n  law: Law.\nz: 2\n"):
     config = tmp_path / "config.yaml"
-    config.write_text("# top\na: 1 # keep\ncategory-definitions:\n  STEM: Old.\nz: 2\n",
-                      encoding="utf-8")
-    defs = Definitions(config)
-    assert defs.data == {"STEM": "Old."}
-    defs.set("LAW", " Law courses. ")
-    defs.set("STEM", "New.")
+    config.write_text(text, encoding="utf-8")
+    return config
+
+
+def test_the_repo_is_made_from_config_and_the_cloud(tmp_path):
+    config = _config(tmp_path)
+    cloud = FakeCloud({"STEM": "Shared STEM.", "MATH": "Math."})
+    defs = Definitions(config, cloud=cloud)
+    assert defs.folder == tmp_path / "definitions"
+    assert defs.data == {"LAW": "Law.", "MATH": "Math.", "STEM": "Old."}
+    # STEM differs from the cloud's: this PC's own. LAW is new to the cloud: offered later.
+    assert {c: (e["origin"], e["pending"]) for c, e in defs.entries.items()} == {
+        "LAW": ("local", True), "MATH": ("cloud", False), "STEM": ("local", False)}
     text = config.read_text(encoding="utf-8")
     assert text.startswith("# top\na: 1 # keep\n") and text.endswith("\nz: 2\n")
-    assert text.count(SECTION_HEADER) == 1
-    assert yaml.safe_load(text) == {"a": 1, "z": 2,
-                                    "category-definitions": {"LAW": "Law courses.", "STEM": "New."}}
+    assert SECTION_HEADER not in text
+    assert yaml.safe_load(text) == {"a": 1, "z": 2, "definitions-folder": str(defs.folder)}
+    # Made once: a later read takes the folder as it is, even with the cloud down.
+    assert Definitions(config, cloud=FakeCloud(down=True)).data == defs.data
+
+
+def test_resolve_takes_the_cloud_s_then_drafts_and_shares(tmp_path):
+    config = _config(tmp_path, "a: 1\n")
+    cloud = FakeCloud({"MATH": "Math."})
+    drafts = []
+
+    def draft(text):
+        return lambda: drafts.append(text) or text
+
+    defs = Definitions(config, cloud=cloud)
+    assert defs.data == {"MATH": "Math."}
+    cloud.shared["BIO"] = "Biology."  # added after this PC's repo was made
+    assert defs.resolve("BIO", draft("never")) == ("Biology.", "cloud")
+    assert defs.resolve("ART", draft("Art courses.")) == ("Art courses.", "drafted")
+    assert cloud.shared["ART"] == "Art courses." and defs.entries["ART"]["origin"] == "cloud"
+    assert defs.resolve("ART", draft("never")) == ("Art courses.", "repo")
+    assert drafts == ["Art courses."]
+
+
+def test_a_draft_loses_to_an_earlier_client_s(tmp_path):
+    cloud = FakeCloud()
+    defs = Definitions(_config(tmp_path, "a: 1\n"), cloud=cloud)
+
+    def other_client_first():
+        cloud.shared["LAW"] = "Their law."  # another client shared LAW while this one drafted
+        return "My law."
+
+    assert defs.resolve("LAW", other_client_first) == ("Their law.", "drafted")
+    assert defs.entries["LAW"]["origin"] == "cloud"
+
+
+def test_a_draft_made_offline_is_shared_when_next_used(tmp_path):
+    config = _config(tmp_path, "a: 1\n")
+    defs = Definitions(config, cloud=FakeCloud(down=True))
+    assert defs.resolve("ART", lambda: "Art.") == ("Art.", "drafted")
+    assert (defs.entries["ART"]["origin"], defs.entries["ART"]["pending"]) == ("local", True)
+    cloud = FakeCloud()
+    assert Definitions(config, cloud=cloud).resolve("ART", lambda: "never") == ("Art.", "repo")
+    assert cloud.created == ["ART"]
+    entry = Definitions(config, cloud=cloud).entries["ART"]
+    assert (entry["origin"], entry["pending"]) == ("cloud", False)
+
+
+def test_an_edit_is_a_local_override_until_use_cloud(tmp_path):
+    cloud = FakeCloud({"STEM": "Shared."})
+    defs = Definitions(_config(tmp_path, "a: 1\n"), cloud=cloud)
+    assert defs.update("STEM", "Mine.")["origin"] == "local"
+    assert defs.update("STEM", " Shared. ")["origin"] == "cloud"
+    defs.update("STEM", "Mine.")
+    assert defs.use_cloud("STEM")["definition"] == "Shared." and defs.origin("STEM") == "cloud"
+    assert cloud.shared == {"STEM": "Shared."}  # an edit never reaches the cloud
+    assert defs.use_cloud("NONE") is None
 
 
 def test_definer_falls_back_to_the_llm_builder_settings():
@@ -167,8 +257,8 @@ def test_definition_for_drafts_once(tmp_path, monkeypatch):
     config = tmp_path / "config.yaml"
     config.write_text("a: 1\n", encoding="utf-8")
     cfg = {"log-folder": str(tmp_path / "log")}
-    assert definer.definition_for(config, cfg, "STEM") == ("STEM means science.", True)
-    assert definer.definition_for(config, cfg, "STEM") == ("STEM means science.", False)
+    assert definer.definition_for(config, cfg, "STEM") == ("STEM means science.", "drafted")
+    assert definer.definition_for(config, cfg, "STEM") == ("STEM means science.", "repo")
     assert llm.defined == ["STEM"]
 
 

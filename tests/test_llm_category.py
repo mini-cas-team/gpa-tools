@@ -148,8 +148,7 @@ def test_run_without_transcripts_or_ollama_is_a_run_error(cfg, monkeypatch):
     with pytest.raises(RunError, match="No definition for STEM .* gemini try 2 .*"
                                        "ollama try 1 .* connection refused"):
         llm_run.run(cfg, "STEM")
-    with cfg["config"].open("a", encoding="utf-8") as fh:
-        fh.write("category-definitions:\n  STEM: Science.\n")
+    Definitions(cfg["config"]).set("STEM", "Science.")
     with pytest.raises(RunError, match="Cannot reach Ollama"):
         llm_run.run(cfg, "STEM")
 

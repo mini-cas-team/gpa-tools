@@ -1,6 +1,6 @@
 ---
 name: install-gpa-tools
-description: Install gpa-tools on this machine and get it running - Python venv and packages, pdftotext, Ollama, two LLM models sized to the machine's RAM and GPU (a fast build model that fits in the GPU, and the largest definition model that fits), the optional TypeSafe jev builder (API key in an environment variable), the category-definer (dev: ChatGPT, then Gemini in browser windows, then Ollama; prod: Gemini headless, then Ollama), and config.yaml (folders, model, ollama-url, active builder, definer mode). Use when the user asks to install, set up or repair gpa-tools or its dependencies, to add or fix the jev builder, when config.yaml is missing, or when Ollama/the model/TypeSafe is not reachable.
+description: Install gpa-tools on this machine and get it running - Python venv and packages, pdftotext, Ollama, two LLM models sized to the machine's RAM and GPU (a fast build model that fits in the GPU, and the largest definition model that fits), the jev builder through the gpa-tools cloud server (this laptop asks for its own client token with the user's email, the package owner approves it; direct TypeSafe with an API key for development only), the category-definer (dev: ChatGPT, then Gemini in browser windows, then Ollama; prod: Gemini headless, then Ollama), and config.yaml (folders, model, ollama-url, active builder, definer mode). Use when the user asks to install, set up or repair gpa-tools or its dependencies, to add or fix the jev builder or this laptop's cloud token, when config.yaml is missing, or when Ollama/the model/the cloud server is not reachable.
 ---
 
 # Installing gpa-tools
@@ -22,9 +22,12 @@ report in plain text or JSON; this file says in what order and what to ask.
   marked **Ask** below.
 - **Report faithfully.** If a step fails, show its output and stop that step.
   Don't paper over it.
-- **Never handle the TypeSafe API key.** Don't create it, ask for it in chat,
-  print it, or write it into any file. The user creates it and exports it
-  themselves; config.yaml holds only the variable's *name* (`api-key-env`).
+- **Never handle secrets.** That covers the TypeSafe API key, the cloud server's
+  admin token, and this laptop's client token.
+  - Don't ask for them in chat, print them, or write them into any file.
+  - Never `cat` the files in `~/.gpa-tools/`. `ls -la` is fine.
+  - config.yaml holds only variable *names* (`api-key-env`, `cloud-token-env`).
+  - The user's email is not a secret, and the token request needs it.
 
 ## Paths per OS
 
@@ -48,9 +51,11 @@ Ollama binary, whether a server answers at
 `http://localhost:11434` (and at any `ollama-url` already in config.yaml) with
 its models, Chrome and Edge, the config.yaml folders, the two Ollama models
 (`category-build-model`, `category-definition-model`), the definer's mode,
-`recommended_models` (a build and a definition model), and the jev builder: its model, whether the key
-variable is set in this shell (never its value) and, if so, whether TypeSafe
-accepts the key and the model. If `config.outdated` is not empty, config.yaml
+`recommended_models` (a build and a definition model), and the jev builder.
+In cloud mode it shows the cloud-url, where this laptop's token comes from
+(`~/.gpa-tools/client_token`, a request waiting for approval, or none), and
+whether the server accepts it. In direct mode it shows whether the key variable
+is set (never its value) and whether TypeSafe accepts it. If `config.outdated` is not empty, config.yaml
 is from an older version: tell the user which keys are outdated, then run
 configure.py with the model and URL they had there and delete the old keys
 once the user agrees.
@@ -205,51 +210,84 @@ When both picks are the same model, pull it once and leave out
 `--definer-model`. Run the pulls in the background with a long timeout and
 tell the user they're downloading. A 32b or 72b download is tens of GB.
 
-## Step 6 — the jev builder (TypeSafe), optional
+## Step 6 — the jev builder (gpa-tools cloud), optional
 
 Two category builders decide which courses are in a category:
 
-- **llm** — the local Ollama model from steps 4–5. Free and offline, but slow
-  on a CPU (1.5–2 hours for ~400 courses) and a small model misses obvious
+- **llm**: the local Ollama model from steps 4–5. Free and offline, but slow
+  on a CPU (1.5–2 hours for ~400 courses), and a small model misses obvious
   courses (Data Structures, College Algebra).
-- **jev** — TypeSafe's hosted Jev model. Needs internet, a TypeSafe account
-  and an API key. ~400 courses take a few seconds and cost well under a cent
-  ($0.042 per million input tokens, output free). It gives each course a 0–1
-  score, kept in `<cat>_courses.csv`.
+- **jev**: TypeSafe's Jev model, reached through the **gpa-tools cloud server**
+  (`cloud-url`). The server holds the TypeSafe key and shares course scores
+  between all laptops.
+  - This laptop needs only its own client token. It never needs a TypeSafe key.
+  - ~400 courses take a few seconds. Courses another laptop already scored are free.
+  - Each course gets a 0–1 score, kept in `<cat>_courses.csv`.
 
 **Ask** whether to set up jev, and if so whether it should be the active
 builder (the one the Upload and View tabs start with). The default is llm.
-If check.py already shows jev with the key set and the model accepted, skip
-to the `ask` below.
+If check.py already shows `token: …/client_token; server accepts the token`, jev
+is done: skip to the save in step 4 below.
 
-1. The user creates a key: TypeSafe console (https://console.typesafe.ai) →
-   **API Keys**, then copies it. The account needs a balance; the console
-   shows it, and runs fail with "out of funds" at $0.00.
-2. The user stores it in an environment variable, `GPA_TOOLS_KEY` by default,
-   **themselves** — tell them not to paste it here:
-   - Linux/macOS: `export GPA_TOOLS_KEY="<key>"` in `~/.bashrc` or `~/.zshrc`,
-     then a new terminal.
-   - Windows: `setx GPA_TOOLS_KEY "<key>"` in a terminal, then a new terminal.
+1. **Point config.yaml at the server.** A new config.yaml from the template already
+   has `mode: cloud` and the deployed `cloud-url`. For an older one:
+   ```bash
+   $PY install/configure.py --jev-mode cloud --cloud-url https://gpa-tools-jev.johnprofessional132.workers.dev
+   ```
+2. **Ask** for the user's email. It is required: the package owner sees it in the
+   request list, and the token is named `<email>:<hostname>`. Then request the token:
+   ```bash
+   $PY -m jev_category.enroll request --email <email>
+   ```
+   - It creates `~/.gpa-tools/` (`chmod 700`) with `pending_token`, a random token
+     made on this laptop (`600`), and `request.json`.
+   - It sends the server only the token's sha256, the email and the hostname.
+   - It prints the request id. If the server can't be reached, the request is
+     sent on the next start: say so and go on.
+   - If check.py showed an old token that the server now refuses (401, revoked),
+     add `--new`.
+3. **Approval is done by a person, the package owner.** Tell the user:
+   - the request id and the name `<email>:<hostname>`;
+   - to ask the package owner to approve it. The owner runs
+     `python -m jev_category.admin requests`, then `approve <id>`, with the admin
+     token in `GPA_TOOLS_CLOUD_ADMIN_TOKEN`.
+   - If the user *is* the owner, they run those commands **in their own terminal**.
+     Never ask for the admin token here.
+   - Until the request is approved, the install can finish. The web UI prints a
+     NOTICE at start and jev runs stop with "No gpa-tools cloud token on this
+     laptop … Contact the package owner". The llm builder still works.
+4. **Once approved:**
+   ```bash
+   $PY -m jev_category.enroll status     # approved: pending_token becomes client_token
+   python3 install/check.py --text       # token: ~/.gpa-tools/client_token; server accepts the token
+   ```
+   Every start does the same pickup by itself, so this check is optional. To make
+   jev the active builder:
+   ```bash
+   $PY install/configure.py --active-builder jev
+   ```
 
-   If they picked another name, use it as `--jev-key-env` / `--key-env` below.
-3. Check it. Claude Code's shell may not read the profile, so on Linux/macOS
-   run these through `bash -ic '…'` (or `zsh -ic`) if the variable shows as
-   not set:
-   ```bash
-   python3 install/jev_check.py probe                 # free: is the key accepted
-   python3 install/jev_check.py ask jev-1.14.0        # one real question, ~$0.00002
-   ```
-   Use a versioned model (`jev-1.14.0`) so cached scores don't change under
-   the user when TypeSafe ships a new release; `jev-latest` follows releases.
-   Plain `jev` is not a model name: the API answers "Unknown model: jev".
-4. Save it:
-   ```bash
-   $PY install/configure.py --jev-model jev-1.14.0                        # keep llm active
-   $PY install/configure.py --jev-model jev-1.14.0 --active-builder jev   # make jev active
-   ```
+`GPA_TOOLS_CLOUD_TOKEN` (the variable `cloud-token-env` names), when set, wins
+over `~/.gpa-tools/`. It's for testing only. Don't set it in a profile.
 
 Ollama is still the definer's last fallback (step 7), so keep steps 4–5 even
 with jev active.
+
+### Direct mode (development only)
+
+`mode: direct` calls TypeSafe itself and needs the TypeSafe API key on this
+machine. Set it up only when the user asks for it. Production laptops use cloud
+mode.
+
+1. The user creates a key in the TypeSafe console (https://console.typesafe.ai →
+   **API Keys**). The account needs a balance.
+2. They store it **themselves** in `GPA_TOOLS_KEY`: `export` it in
+   `~/.bashrc`/`~/.zshrc`, or `setx` it on Windows, then open a new terminal.
+   Tell them not to paste it here.
+3. Check it, through `bash -ic '…'` if the variable shows as not set:
+   `python3 install/jev_check.py probe`, then `python3 install/jev_check.py ask jev-1.14.0`
+   (one question, ~$0.00002). Use a versioned model; plain `jev` is not a model name.
+4. `$PY install/configure.py --jev-mode direct --jev-model jev-1.14.0`
 
 ## Step 7 — the category-definer
 
@@ -300,9 +338,13 @@ Then tell the user:
 - the definer's mode (dev: chatgpt → gemini → ollama in windows; prod: gemini
   headless → ollama) and that
   each try is logged to `<log-folder>/category_definer.log`
-- if jev was set up: its model, the key variable's name, and which builder is
-  active. The app reads the key at run time, so it must start from a shell
-  where the variable is set (not from a launcher that skips the profile)
+- if jev was set up:
+  - which builder is active;
+  - the cloud-url;
+  - the token request's id and name, and whether it is approved yet;
+  - that until then, the package owner must approve it (`jev_category.admin approve <id>`).
+  The token is in `~/.gpa-tools/client_token`, so the app can start from any
+  shell or launcher.
 - how to start the app: `$PY -m browser_view`, then open http://127.0.0.1:5001
   (in VS Code, the "browser-view: web UI" launch entry)
 - the first category: on the Upload tab, Add, then a name such as STEM.
@@ -317,7 +359,10 @@ Then tell the user:
 - **macOS:** delete `~/Applications/Ollama.app`.
 - **Windows:** use Settings → Apps → Ollama.
 - Models are in `~/.ollama/models`.
-- **jev:** delete the key in the TypeSafe console and remove the `export` (or, on Windows, `setx GPA_TOOLS_KEY ""` / Settings → environment variables).
+- **jev (cloud):** delete `~/.gpa-tools/`, and ask the package owner to revoke `<email>:<hostname>`
+  (`python -m jev_category.admin revoke <email>:<hostname>`).
+- **jev (direct):** delete the key in the TypeSafe console and remove the `export`
+  (on Windows, `setx GPA_TOOLS_KEY ""`, or Settings → environment variables).
 
 ## Troubleshooting
 
@@ -328,8 +373,12 @@ Then tell the user:
 | `model "…" not found` | Not pulled on *that* server: run `ollama_check.py pull <url> <model>`. |
 | The first `ask` takes a minute | Loading the model. Later answers take a few seconds with a GPU, 10–20 s on a CPU. |
 | `bind: address already in use` from `ollama serve` | Another Ollama (maybe a system install) already holds port 11434. Use that one. |
-| `GPA_TOOLS_KEY is not set` / `The TypeSafe API key is not set` | The shell or app didn't load the profile. Open a new terminal, or on Linux/macOS run through `bash -ic`. On Windows, `setx` only affects new terminals. |
-| `HTTP 401` from TypeSafe | Wrong or revoked key: create a new one in the console and re-export it. |
+| `No gpa-tools cloud token on this laptop: its request is waiting for approval` | The package owner hasn't approved it yet. `$PY -m jev_category.enroll status` re-checks. |
+| `… was rejected` / `none was requested` | Request again: `$PY -m jev_category.enroll request --email <email>`. |
+| `HTTP 401 … token was revoked or is unknown` (cloud) | The owner revoked it. Run `$PY -m jev_category.enroll request --new --email <email>`, and the owner approves again. |
+| `the cloud server cannot be reached` / `Cannot reach the gpa-tools cloud` | No internet, or a wrong `cloud-url`. `curl <cloud-url>/v1/info` should answer 401 (up, no token sent). |
+| `GPA_TOOLS_KEY is not set` / `The TypeSafe API key is not set` (direct) | The shell or app didn't load the profile. Open a new terminal, or on Linux/macOS run through `bash -ic`. On Windows, `setx` only affects new terminals. |
+| `HTTP 401` from TypeSafe (direct) | Wrong or revoked key: create a new one in the console and re-export it. |
 | `Unknown model: …` | Not a TypeSafe model name: `jev_check.py probe` lists aliases; versioned IDs like `jev-1.14.0` work too. |
 | `out of funds` | The TypeSafe balance is $0.00; the user adds funds in the console. |
 | `no usable browser: chrome, msedge, playwright chromium not installed` | No Chrome or Edge where Playwright looks. Run `$PY -m playwright install chromium`, or leave it: Ollama drafts instead. |

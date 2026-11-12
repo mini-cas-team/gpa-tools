@@ -75,7 +75,10 @@ category-builder:
     category-build-model: qwen2.5:3b # yes/no per course; the installer picks one for this machine
     category-definition-model: qwen2.5:3b # category-definer's ollama step; one call per category, so a bigger model is affordable
     ollama-url: http://localhost:11434 # any model in `ollama list` there
-  jev: # TypeSafe's Jev scores each course 0-1 (hosted; needs an API key)
+  jev: # TypeSafe's Jev scores each course 0-1, through the gpa-tools cloud server
+    mode: cloud # cloud: the gpa-tools cloud server holds the TypeSafe key; direct: TypeSafe with the key in api-key-env (development)
+    cloud-url: https://gpa-tools-jev.johnprofessional132.workers.dev # mode cloud: the server
+    cloud-token-env: GPA_TOOLS_CLOUD_TOKEN # mode cloud: optional override; the token is ~/.gpa-tools/client_token (python -m jev_category.enroll)
     model: jev-1.14.0 # a version pins it; `jev-latest` follows new releases
     api-url: https://api.typesafe.ai/v1/systemone
     api-key-env: GPA_TOOLS_KEY # name of the env var holding the key; never put the key here
@@ -184,6 +187,9 @@ def main(argv=None) -> int:
     ap.add_argument("--ollama-url")
     ap.add_argument("--jev-model", help="the jev builder's TypeSafe model, e.g. jev-1.14.0")
     ap.add_argument("--jev-key-env", help="name of the env var holding the TypeSafe API key")
+    ap.add_argument("--jev-mode", choices=("cloud", "direct"),
+                    help="cloud: the gpa-tools cloud server (a laptop token); direct: TypeSafe itself (dev)")
+    ap.add_argument("--cloud-url", help="the gpa-tools cloud server, mode cloud")
     ap.add_argument("--active-builder", choices=("llm", "jev"),
                     help="the builder the Upload and View tabs start with")
     ap.add_argument("--definer-mode", choices=("dev", "prod"),
@@ -215,7 +221,8 @@ def main(argv=None) -> int:
                            ("category-definition-model", args.definer_model or args.model),
                            ("ollama-url", args.ollama_url)) if v]
     nested += [(("category-builder", "jev", k), v)
-               for k, v in (("model", args.jev_model), ("api-key-env", args.jev_key_env)) if v]
+               for k, v in (("mode", args.jev_mode), ("cloud-url", args.cloud_url),
+                            ("model", args.jev_model), ("api-key-env", args.jev_key_env)) if v]
     if args.definer_mode:
         nested.append((("category-definer", "mode"), args.definer_mode))
     for (*parents, key), value in nested:
@@ -256,7 +263,8 @@ def main(argv=None) -> int:
     for path in (("category-builder", "llm", "category-build-model"),
                  ("category-builder", "llm", "category-definition-model"),
                  ("category-builder", "llm", "ollama-url"),
-                 ("category-definer", "mode"), ("category-builder", "jev", "model"),
+                 ("category-definer", "mode"), ("category-builder", "jev", "mode"),
+                 ("category-builder", "jev", "cloud-url"), ("category-builder", "jev", "model"),
                  ("category-builder", "jev", "api-key-env")):
         print(f"  {'.'.join(path)}: {_get(parsed, path)}")
     if parsed.get("tool-folders"):

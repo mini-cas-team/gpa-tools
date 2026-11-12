@@ -5,8 +5,9 @@ Asks TypeSafe's Jev to rank each <name>.txt in the work folder (default
 normal recommendation letter, one `choice` question per letter, and writes
 filename,rank,confidence to --out (default <work>/letter_ranks.csv) once every
 letter is ranked.
-Model, API URL and the API key's environment variable come from config.yaml's
-category-builder: jev: section.
+How Jev is reached (mode cloud or direct, the cloud URL and token variable,
+or TypeSafe's model, URL and key variable) comes from config.yaml's
+category-builder: jev: section; the question itself is in jev_core/prompts.json.
 """
 
 from __future__ import annotations
@@ -17,40 +18,30 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-import category_builder
-from category_builder.common import RunError
-from jev_category.builder import DEFAULTS, api_key
-from jev_category.client import JevClient, JevError
+import jev_core
+from jev_category import builder as jev_builder
+from jev_category.client import JevError
 from letter_builder import RANKS_CSV, parse_cli, pdf2txt
 
-INSTRUCTIONS = "How strong a recommendation is this letter for the student it is about?"
-CRITERIA = {
-    "excellent": "The writer gives an exceptional, unreserved endorsement backed by specific evidence: "
-                 "ranks the student among the very best they have known, with concrete achievements.",
-    "good": "A clearly positive, supportive endorsement with some specific evidence, "
-            "but without placing the student at the very top.",
-    "normal": "A routine or lukewarm letter: generic praise, little specific evidence, "
-              "or confirms facts more than it recommends.",
-}
+CRITERIA = jev_core.LETTERS["criteria"]  # excellent, good, normal
 FIELDS = ["filename", "rank", "confidence"]
 
 
-def jev_client(raw: dict) -> JevClient:
-    """A client from config.yaml's jev settings; RunError when the API key is not set."""
-    jev_cfg = {**DEFAULTS, **category_builder.settings(raw, "jev")}
-    return JevClient(jev_cfg["api-url"], jev_cfg["model"], api_key({"key_env": jev_cfg["api-key-env"]}))
+def jev_client(raw: dict):
+    """The Jev client config.yaml's jev settings ask for (cloud or direct);
+    RunError when its token or API key is not set."""
+    return jev_builder.client(jev_builder.jev_settings(raw))
 
 
-def rank(client: JevClient, letter: str) -> tuple[str, float]:
+def rank(client, letter: str) -> tuple[str, float]:
     """(excellent|good|normal, Jev's confidence)."""
-    question = {"type": "choice", "instructions": INSTRUCTIONS, "criteria": CRITERIA}
-    answer = client.answers({"letter": letter}, {"rank": question}).get("rank") or {}
-    if answer.get("choice") not in CRITERIA:
-        raise JevError(f"unexpected answer: {answer}")
-    return answer["choice"], float(answer.get("confidence") or 0)
+    choice, confidence = client.rank_letter(letter)
+    if choice not in CRITERIA:
+        raise JevError(f"unexpected answer: {choice}")
+    return choice, confidence
 
 
-def rank_pdfs(client: JevClient, pdfs: list[Path], work: Path, progress=None):
+def rank_pdfs(client, pdfs: list[Path], work: Path, progress=None):
     """Convert each PDF to <work>/<name>.txt and rank it:
     ([(txt name, rank, confidence)], [{file, error}]).
 

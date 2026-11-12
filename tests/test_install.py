@@ -103,6 +103,7 @@ def test_template_is_valid_yaml_with_every_key():
                                               "ollama-url": "http://localhost:11434"}
     assert "model" not in cfg["category-definer"]
     assert cfg["category-builder"]["jev"] == {
+        "mode": "cloud", "cloud-url": "https://gpa-tools-jev.johnprofessional132.workers.dev", "cloud-token-env": "GPA_TOOLS_CLOUD_TOKEN",
         "model": "jev-1.14.0", "api-url": "https://api.typesafe.ai/v1/systemone",
         "api-key-env": "GPA_TOOLS_KEY", "threshold": 0.5, "batch-size": 20}
     assert cfg["active-category-builder"] == "llm"
@@ -244,6 +245,11 @@ def test_configure_sets_jev_and_the_active_builder(tmp_path, capsys):
     assert "category-builder.jev.model: jev-latest" in capsys.readouterr().out
     loaded = jev_run.load_config(config)
     assert (loaded["model"], loaded["key_env"]) == ("jev-latest", "MY_KEY")
+    assert loaded["mode"] == "cloud" and loaded["cloud_url"].startswith("https://")  # the template's default
+    assert configure.main(["--config", str(config), "--no-mkdir", "--jev-mode", "direct",
+                           "--cloud-url", "http://127.0.0.1:8787"]) == 0
+    loaded = jev_run.load_config(config)
+    assert (loaded["mode"], loaded["cloud_url"]) == ("direct", "http://127.0.0.1:8787")
 
 
 def test_check_reports_jev_without_revealing_the_key(monkeypatch):
@@ -262,6 +268,32 @@ def test_check_reports_jev_without_revealing_the_key(monkeypatch):
     assert check.jev_model_ok("jev-1.14.0", []) and check.jev_model_ok("jev-latest", ["jev-latest"])
     assert check.jev_models_url("https://api.typesafe.ai/v1/systemone") == \
         "https://api.typesafe.ai/v1/models"
+
+
+def test_check_reports_cloud_mode_without_revealing_the_token(monkeypatch, gpa_tools_home):
+    cfg = {"category-builder": {"jev": {"mode": "cloud", "cloud-url": "https://c.test",
+                                        "cloud-token-env": "TOK"}}}
+    monkeypatch.delenv("TOK", raising=False)
+    info = check.jev_info(cfg)
+    assert {k: info[k] for k in ("mode", "cloud-url", "cloud-token-env", "token_set")} == \
+        {"mode": "cloud", "cloud-url": "https://c.test", "cloud-token-env": "TOK", "token_set": False}
+    assert info["token_from"].startswith("none")
+    gpa_tools_home.mkdir()
+    (gpa_tools_home / "pending_token").write_text("gpat_waiting")
+    assert check.jev_info(cfg)["token_from"].startswith("requested")
+    (gpa_tools_home / "client_token").write_text("gpat_fromfile\n")
+    seen = []
+    monkeypatch.setattr(check, "probe_cloud", lambda url, token: seen.append(token) or {"model": "m"})
+    info = check.jev_info(cfg)
+    assert seen == ["gpat_fromfile"] and info["token_from"].endswith("client_token")
+    assert "gpat_fromfile" not in str(info)
+    probed = []
+    monkeypatch.setenv("TOK", "gpat_secret")
+    monkeypatch.setattr(check, "probe_cloud", lambda url, token: probed.append((url, token)) or
+                        {"reachable": True, "authorized": True, "model": "jev-1.14.0"})
+    info = check.jev_info(cfg)
+    assert probed == [("https://c.test", "gpat_secret")] and info["cloud"]["model"] == "jev-1.14.0"
+    assert "gpat_secret" not in str(info)
 
 
 def test_jev_check_needs_the_key_and_asks_one_question(monkeypatch, capsys):
