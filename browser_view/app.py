@@ -44,7 +44,7 @@ import rank_ai
 from out_builder import publish
 from profile import display as profile_display, enrich, profile_load
 from summary import groups as summary_groups, table as summary_table
-from summary.names import name_keys
+from summary.names import components_with_data, name_keys
 from summary.personal import (DEFAULT_SHOW as PROFILE_SHOW, DEFAULT_VALUES as PROFILE_VALUES, DESCRIPTION as PROFILE_DESCRIPTION,
                               ISO_DATE, Profile, profile_fields)
 from summary.recommendation import (DESCRIPTION as LETTER_DESCRIPTION, FILTERS as LETTER_FILTERS, HINTS as LETTER_HINTS,
@@ -304,6 +304,20 @@ def _dev_mode(cfg: dict) -> bool:
     return category_builder.run_mode(cfg) == "dev"
 
 
+VIEW_COMPONENTS = ("transcripts", "letters", "personal")
+
+
+def _shown_components(cfg: dict) -> set[str]:
+    """The components whose View page, Rank column and Config row are shown: all of
+    them in dev run_mode; in prod only those with data (summary.names.components_with_data)."""
+    if _dev_mode(cfg):
+        return set(VIEW_COMPONENTS)
+    try:
+        return components_with_data(cfg)
+    except (KeyError, OSError):
+        return set()
+
+
 NOT_ON_CLOUD = "{name} is not on the cloud server. Ask the package owner to add it."
 
 
@@ -385,6 +399,11 @@ def create_app(config_path: Path | None = None) -> Flask:
     add_tool_folders(_load_config(config_path).get("tool-folders"))
     # Every page's column names: M.state and the like explain themselves on hover.
     app.jinja_env.globals.update(field_hint=profile_display.hint, profile_hints=profile_display.HINTS)
+
+    @app.context_processor
+    def _view_nav():
+        """shown: the components whose View pages the side bar lists (_shown_components)."""
+        return {"shown": _shown_components(_load_config(config_path))}
 
     @app.get("/")
     def welcome():
@@ -975,6 +994,7 @@ def create_app(config_path: Path | None = None) -> Flask:
         picked: Transcript (from the active builder: ?category=, ?by=, its ranges;
         None when the builder has built nothing), Recommend Letter and Profile.
         Shared by the page and its AI box, so both see the same filters."""
+        shown = _shown_components(cfg)
         by = request.args.get("by")
         by = by if by in TRANSCRIPT_SOURCES else DEFAULT_SOURCE
         ranges = _ranges(TRANSCRIPT_FILTERS)
@@ -984,7 +1004,14 @@ def create_app(config_path: Path | None = None) -> Flask:
         out = dict(by=by, ranges=ranges, rec_ranges=rec_ranges, prof_fields=prof_fields,
                    prof_query=prof_query, profile=Profile(cfg, **prof_query),
                    builder=category_builder.active(cfg), categories=[], selected="",
-                   transcript=None, error=None)
+                   transcript=None, error=None, shown=shown)
+        out["recommendation"] = Recommendation(cfg, rec_ranges)
+        # the columns: only the shown components' (prod hides one without data)
+        columns = lambda: [o for o, c in ((out["transcript"], "transcripts"), (out["recommendation"], "letters"),
+                                          (out["profile"], "personal")) if o and c in shown]
+        if "transcripts" not in shown:  # prod, no transcripts: no Transcript column, no message
+            out["objects"] = columns()
+            return out
         # The Transcript column uses the active builder; its dialog picks the category.
         try:
             builder, folder = _builder_folder(cfg, None)
@@ -1001,8 +1028,7 @@ def create_app(config_path: Path | None = None) -> Flask:
             else:
                 out["error"] = (f"the {builder} builder has no results (*_gpa.csv) in {folder} yet,"
                                 " so there is no Transcript column")
-        out["recommendation"] = Recommendation(cfg, rec_ranges)
-        out["objects"] = [o for o in (out["transcript"], out["recommendation"], out["profile"]) if o]
+        out["objects"] = columns()
         return out
 
     @app.get("/view/rank")

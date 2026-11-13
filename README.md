@@ -727,6 +727,14 @@ installer's config editing.
 
 ## Changes
 
+### 2026-11-13: production hides what has no data
+
+- In production (`run_mode: prod`), a component with no data yet is hidden: its
+  page under **View** (Transcripts, Recommendations or Profiles), its column in
+  **Rank**, and its row in Rank's **Config**. It shows up by itself once it has data:
+  a transcript (or built results), a letter PDF, or a profile. Upload pages always stay.
+- Development (`run_mode: dev`) shows everything, as before.
+
 ### 2026-11-13: production and development
 
 - **New branches.** `prod` holds the released versions and is what laptops

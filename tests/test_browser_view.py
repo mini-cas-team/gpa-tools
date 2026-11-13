@@ -541,3 +541,59 @@ def test_only_one_run_at_a_time(client, monkeypatch, folders, jev_builder):
     assert r.status_code == 409 and r.get_json()["status"] == "running"
     release.set()
     assert wait_for_job(client)["status"] == "done"
+
+
+# --- prod hides the components without data ------------------------------------
+
+def _nav(body):
+    return body[body.index('<nav class="side"'):body.index("</nav>")]
+
+
+def test_prod_hides_the_view_pages_rank_columns_and_config_rows_of_empty_components(client, prod, folders):
+    """Only transcripts have data (built STEM results): no letters, no profiles."""
+    common_json(folders[1].parent / "work" / "transcripts", "ann", [("PHYS 101", "Mechanics", "A", 4, 4.0)])
+    body = client.get("/view/rank").get_data(as_text=True)
+    nav = _nav(body)
+    assert 'href="/transcripts/view"' in nav
+    assert 'href="/letters/view"' not in nav and 'href="/profiles/view"' not in nav
+    assert 'href="/letters/ftp-upload"' in nav and 'href="/profiles/upload"' in nav  # uploads stay
+    config = body[body.index('class="rank-config"'):body.index("</table>", body.index('class="rank-config"'))]
+    rows = config.split("<tr")[2:]  # after the header row
+    assert [("hidden" in r.split(">")[0]) for r in rows] == [False, True, True]
+    head = body[body.index("<thead"):body.index("</thead>")]
+    assert "Transcript" in head and "Recommend Letter" not in head and "Profile" not in head
+    assert 'id="recommendation-dialog"' in body and 'id="profile-dialog"' in body  # the script finds them
+
+
+def test_prod_shows_a_component_once_it_has_data(client, prod, folders):
+    tmp = folders[1].parent
+    (tmp / "in" / "letters").mkdir(parents=True)
+    (tmp / "in" / "letters" / "ann_letter1.pdf").write_bytes(b"%PDF-1.4")
+    (tmp / "work" / "personal").mkdir(parents=True)
+    (tmp / "work" / "personal" / "ann.json").write_text('{"name": "Ann Lee"}')
+    common_json(tmp / "work" / "transcripts", "ann", [("PHYS 101", "Mechanics", "A", 4, 4.0)])
+    body = client.get("/view/rank").get_data(as_text=True)
+    nav = _nav(body)
+    assert all(h in nav for h in ('href="/transcripts/view"', 'href="/letters/view"', 'href="/profiles/view"'))
+    head = body[body.index("<thead"):body.index("</thead>")]
+    assert "Recommend Letter" in head and "Profile" in head
+
+
+def test_prod_without_any_data_has_no_rank_columns_and_no_builder_message(client, prod, folders):
+    for csv_file in folders[0].glob("*.csv"):
+        csv_file.unlink()
+    body = client.get("/view/rank").get_data(as_text=True)
+    nav = _nav(body)
+    assert 'href="/view/rank"' in nav
+    assert not any(h in nav for h in ('href="/transcripts/view"', 'href="/letters/view"', 'href="/profiles/view"'))
+    assert "so there is no Transcript column" not in body
+
+
+def test_dev_shows_every_component_even_without_data(client, folders):
+    nav = _nav(client.get("/view/rank").get_data(as_text=True))
+    assert all(h in nav for h in ('href="/transcripts/view"', 'href="/letters/view"', 'href="/profiles/view"'))
+
+
+def test_an_empty_components_page_keeps_its_own_link_when_opened(client, prod):
+    nav = _nav(client.get("/letters/view").get_data(as_text=True))
+    assert 'href="/letters/view" class="sub active"' in nav

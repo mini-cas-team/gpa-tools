@@ -62,6 +62,23 @@ def letter_names(cfg: dict, transcripts: dict[str, str] | None = None,
             for key in keys}
 
 
+def components_with_data(cfg: dict) -> set[str]:
+    """The components with at least one file to show: transcripts (a *.common.json in
+    <work-folder>/transcripts, or a builder's <work-folder>/<builder>/*_gpa.csv), letters (a *.pdf in <input-folder>/letters) and personal
+    (a *.json in <work-folder>/personal).  Only looks for files, never reads them."""
+    found = {
+        "transcripts": (folders.work_or_none(cfg, "transcripts"), "*.common.json"),
+        "letters": (folders.input_or_none(cfg, "letters"), "*.pdf"),
+        "personal": (folders.work_or_none(cfg, "personal"), "*.json"),
+    }
+    has = {c for c, (folder, pattern) in found.items()
+           if folder is not None and folder.is_dir() and next(folder.glob(pattern), None) is not None}
+    root = cfg.get("work-folder")
+    if root and next(Path(root).expanduser().glob("*/*_gpa.csv"), None) is not None:
+        has.add("transcripts")
+    return has
+
+
 def name_keys(cfg: dict) -> dict[str, str]:
     """{student name: file key} for every name from transcripts, profiles and
     letters, sorted by name; a name on several keys keeps its transcript's, then

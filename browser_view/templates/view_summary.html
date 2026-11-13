@@ -77,17 +77,19 @@
 <table class="rank-config">
   <thead><tr><th>Column</th><th>Filter</th></tr></thead>
   <tbody>
-    <tr>
+    {# a component without data has no row in prod (shown: app._shown_components); the
+       dialogs stay, hidden, so the script below finds every one #}
+    <tr{% if "transcripts" not in shown %} hidden{% endif %}>
       <td><button type="button" class="link" id="transcript-action" aria-haspopup="dialog" title="{{ descriptions["Transcript"] }}">Transcript</button></td>
       {# one line per ranged source: "ALL GPA ≥ 3.00" #}
       <td>{% if selected and ranges %}{% for source, (low, high) in ranges.items() %}{% if not loop.first %}<br>{% endif %}{{ source_label(source, selected) }} {{ range_label(source, low, high) }}{% endfor %}{% else %}–{% endif %}</td>
     </tr>
-    <tr>
+    <tr{% if "letters" not in shown %} hidden{% endif %}>
       <td><button type="button" class="link" id="recommendation-action" aria-haspopup="dialog" title="{{ descriptions["Recommend Letter"] }}">Recommend Letter</button></td>
       {# one line per ranged source: "Score ≥ 80" #}
       <td>{% if rec_ranges %}{% for source, (low, high) in rec_ranges.items() %}{% if not loop.first %}<br>{% endif %}{{ rec_sources[source] }} {{ rec_range_label(low, high) }}{% endfor %}{% else %}–{% endif %}</td>
     </tr>
-    <tr>
+    <tr{% if "personal" not in shown %} hidden{% endif %}>
       <td><button type="button" class="link" id="profile-action" aria-haspopup="dialog" title="{{ descriptions["Profile"] }}">Profile</button></td>
       {# one line per filtered field: "age 20–30", "sex: F, M" #}
       <td>{% if prof_labels %}{{ prof_labels|join("<br>"|safe) }}{% else %}–{% endif %}</td>

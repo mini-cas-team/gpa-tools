@@ -290,9 +290,10 @@
     {{ navlink("/profiles/upload", "profiles-upload", "Profiles") }}
     <span class="group">View</span>
     {{ navlink("/view/rank", "view-summary", "Rank") }}
-    {{ navlink("/transcripts/view", "view", "Transcripts") }}
-    {{ navlink("/letters/view", "letters-view", "Recommendations") }}
-    {{ navlink("/profiles/view", "profiles-view", "Profiles") }}
+    {# shown: every component in dev run_mode; in prod only those with data (app._shown_components) #}
+    {% if "transcripts" in shown or tab == "view" %}{{ navlink("/transcripts/view", "view", "Transcripts") }}{% endif %}
+    {% if "letters" in shown or tab == "letters-view" %}{{ navlink("/letters/view", "letters-view", "Recommendations") }}{% endif %}
+    {% if "personal" in shown or tab == "profiles-view" %}{{ navlink("/profiles/view", "profiles-view", "Profiles") }}{% endif %}
   </nav>
   <main class="{% block main_class %}{% endblock %}">
     {% if false %}{% block heading %}{% endblock %}{% endif %}
