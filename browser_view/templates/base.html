@@ -27,7 +27,7 @@
   fieldset { min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 1rem 1.1rem; margin: 0 0 1.1rem; }
   legend { padding: 0 .4rem; font-weight: 600; font-size: .9rem; }
   label { display: block; margin: .55rem 0 .2rem; font-size: .88rem; color: var(--muted); }
-  input[type=text], input[type=number], input[type=file], select {
+  input[type=text], input[type=number], input[type=file], input[type=email], input[type=password], select {
     width: 100%; padding: .5rem .6rem; border: 1px solid var(--line);
     border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit;
   }
@@ -78,6 +78,16 @@
   nav.side a:hover { color: var(--fg); background: var(--bg); }
   nav.side a.active { color: var(--accent); background: var(--bg); box-shadow: inset 3px 0 var(--accent); }
   .layout > main { flex: 1; min-width: 0; padding: 0 1rem 2rem; }
+  /* The side bar's cloud account: who this computer is signed in as, or Sign in. */
+  nav.side .cloud { margin-top: auto; padding: .7rem .8rem 0; border-top: 1px solid var(--line); font-size: .8rem; color: var(--muted); }
+  nav.side .cloud .who { display: block; color: var(--fg); overflow-wrap: anywhere; }
+  nav.side .cloud .conn { display: block; margin: .2rem 0 .3rem; }
+  nav.side .cloud .conn.bad { color: var(--bad); }
+  nav.side .cloud a { padding: 0; font-weight: 500; color: var(--accent); }
+  nav.side .cloud a:hover { background: none; text-decoration: underline; }
+  nav.side .cloud button { margin-top: .45rem; font-size: .8rem; padding: .3rem .7rem; }
+  dialog.small { width: min(27rem, calc(100vw - 2rem)); height: auto; }
+  dialog.small form { padding: .4rem 1.2rem 1.2rem; }
   button:disabled { opacity: .6; cursor: progress; }
   .status { margin: 1.4rem 0 0; }
   .status .ok { border-left: 3px solid #1a7f37; }
@@ -294,6 +304,17 @@
     {% if "transcripts" in shown or tab == "view" %}{{ navlink("/transcripts/view", "view", "Transcripts") }}{% endif %}
     {% if "letters" in shown or tab == "letters-view" %}{{ navlink("/letters/view", "letters-view", "Recommendations") }}{% endif %}
     {% if "personal" in shown or tab == "profiles-view" %}{{ navlink("/profiles/view", "profiles-view", "Profiles") }}{% endif %}
+    {# cloud: jev in cloud mode (app._cloud): this computer's account, or Sign in #}
+    {% if cloud %}<div class="cloud">
+      {% if cloud.signed_in %}Cloud account<span class="who">{{ cloud.email or "signed in" }}</span>
+        {% set conn = cloud.conn or {} %}
+        {% if conn.state == "connected" %}<span class="conn" title="One computer of the account works at a time; this one is free for another 30 minutes after your last action">Connected</span>
+        {% elif conn.state == "idle" %}<span class="conn" title="{{ conn.detail }}">Idle: connects on your next action</span>
+        {% elif conn.state in ("busy", "expired", "blocked", "offline", "error") %}<span class="conn bad">{{ conn.detail }}</span>{% endif %}
+        <a href="{{ cloud.account }}" target="_blank" rel="noopener">Account page</a>
+        {% if not cloud.from_env %}<br><button type="button" class="secondary" id="cloud-sign-out">Sign out</button>{% endif %}
+      {% else %}Not signed in to the cloud<br><button type="button" id="cloud-sign-in">Sign in</button>{% endif %}
+    </div>{% endif %}
   </nav>
   <main class="{% block main_class %}{% endblock %}">
     {% if false %}{% block heading %}{% endblock %}{% endif %}
@@ -309,3 +330,61 @@
     {% block body %}{% endblock %}
   </main>
 </div>
+{% if cloud %}
+<dialog id="sign-in-dialog" class="small" aria-labelledby="sign-in-title">
+  <div class="dialog-head">
+    <div>
+      <h2 id="sign-in-title">Sign in to the cloud</h2>
+      <p class="hint">Your gpa-tools account's email and password. This computer gets its own key;
+        the password is not saved.</p>
+    </div>
+    <button type="button" class="close" aria-label="Close">×</button>
+  </div>
+  <form id="sign-in-form">
+    <label for="sign-in-email">Email</label>
+    <input type="email" id="sign-in-email" name="email" autocomplete="username" required>
+    <label for="sign-in-password">Password</label>
+    <input type="password" id="sign-in-password" name="password" autocomplete="current-password" required>
+    <p class="error" id="sign-in-error" role="alert" hidden style="margin:.8rem 0 0"></p>
+    <div class="dialog-actions">
+      <button type="button" class="secondary" id="sign-in-cancel">Cancel</button>
+      <button type="submit" id="sign-in-go">Sign in</button>
+    </div>
+    <p class="hint">No account yet, or forgot the password?
+      <a href="{{ cloud.account }}" target="_blank" rel="noopener">The account page</a> creates one and resets it.</p>
+  </form>
+</dialog>
+<script>
+(() => {
+  const dialog = document.getElementById("sign-in-dialog"), form = document.getElementById("sign-in-form");
+  const error = document.getElementById("sign-in-error"), go = document.getElementById("sign-in-go");
+  // window.gpaSignIn(): any page can open it, e.g. after the cloud said "sign in again".
+  window.gpaSignIn = () => { error.hidden = true; form.reset(); dialog.showModal(); form.email.focus(); };
+  document.getElementById("cloud-sign-in")?.addEventListener("click", window.gpaSignIn);
+  for (const b of [dialog.querySelector(".close"), document.getElementById("sign-in-cancel")]) {
+    b.addEventListener("click", () => dialog.close());
+  }
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    go.disabled = true;
+    error.hidden = true;
+    try {
+      const response = await fetch("/account/sign-in", { method: "POST", body: new FormData(form) });
+      const data = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      location.reload();
+    } catch (err) {
+      error.textContent = err.message;  // textContent: the server's words, never HTML
+      error.hidden = false;
+    } finally {
+      go.disabled = false;
+    }
+  });
+  document.getElementById("cloud-sign-out")?.addEventListener("click", async () => {
+    if (!confirm("Sign this computer out of the cloud? Builds and letter ranks stop until it signs in again.")) return;
+    await fetch("/account/sign-out", { method: "POST" });
+    location.reload();
+  });
+})();
+</script>
+{% endif %}

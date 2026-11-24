@@ -233,7 +233,7 @@ def jev_model_ok(model: str, listed: list[str]) -> bool:
 
 def probe_cloud(cloud_url: str, token: str, timeout: float = 10) -> dict:
     """Whether the gpa-tools cloud server (gpa-tools-cloud) answers and accepts the
-    client token; the Jev model it uses.  /v1/info asks Jev nothing (free)."""
+    key; the Jev model it uses.  /v1/info asks Jev nothing (free)."""
     url = cloud_url.rstrip("/") + "/v1/info"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}",
                                                "User-Agent": "gpa-tools"})
@@ -249,8 +249,9 @@ def probe_cloud(cloud_url: str, token: str, timeout: float = 10) -> dict:
 
 
 def cloud_token_here(env: str) -> tuple[str, str]:
-    """(this laptop's client token, where it came from): $env, else ~/.gpa-tools/client_token
-    (GPA_TOOLS_HOME), else ("", "pending ..." | "none").  Never prints the value."""
+    """(this computer's key, where it came from): $env, else ~/.gpa-tools/client_token
+    (GPA_TOOLS_HOME; made by signing in, jev_category.login), else ("", "none ...").
+    Never prints the value."""
     if os.environ.get(env, "").strip():
         return os.environ[env].strip(), f"${env}"
     home = Path(os.environ.get("GPA_TOOLS_HOME") or Path.home() / ".gpa-tools").expanduser()
@@ -260,13 +261,11 @@ def cloud_token_here(env: str) -> tuple[str, str]:
         token = ""
     if token:
         return token, str(home / "client_token")
-    if (home / "pending_token").exists():
-        return "", "requested, waiting for approval (python -m jev_category.enroll status)"
-    return "", "none (python -m jev_category.enroll request --email <you>)"
+    return "", "not signed in (python -m jev_category.login)"
 
 
 def jev_info(config: dict) -> dict:
-    """The jev builder's settings, whether its key (direct mode) or client token
+    """The jev builder's settings, whether its key (direct mode) or cloud key
     (cloud mode) variable is set (never its value), and, when it is, whether the
     API or cloud server accepts it."""
     s = jev_settings(config)

@@ -42,29 +42,27 @@
     {% else %}<select id="builder-select" class="builder" hidden></select>{# run_mode prod: jev only #}
     {% endif %}<label for="category-select">Category</label>
     <select id="category-select" hidden></select>
-    {% if dev %}<button type="button" id="category-update" class="secondary toggle" aria-pressed="false" hidden>Update</button>
+    <button type="button" id="category-build" title="Build the selected category for every student" hidden>Go</button>
+    <button type="button" id="category-update" class="secondary toggle" aria-pressed="false" hidden>Update</button>
     <button type="button" id="category-add" class="secondary toggle" aria-pressed="false">Add</button>
-    {% else %}{# run_mode prod: no Update or Add; Build runs the selected category at once #}
-    <button type="button" id="category-build" hidden>Build</button>
-    <button type="button" id="category-update" hidden></button>
-    <button type="button" id="category-add" hidden></button>
-    {% endif %}
   </div>
+  <p class="hint" id="category-connection" hidden></p>
 
   <!-- Under the bar: one of view / update / add, then progress while busy. -->
   <p class="panel definition" id="category-definition">Loading…</p>
-  <p class="hint" id="category-origin" hidden><span id="category-origin-text"></span>
-    <button type="button" id="category-use-cloud" class="secondary" hidden>Use cloud version</button></p>
+  <p class="hint" id="category-origin" hidden></p>
+  <p class="hint" id="category-n"></p>
 
   <form id="category-update-form" hidden>
     <label for="category-text">Definition of <span id="category-update-name"></span></label>
     <textarea id="category-text" name="definition" rows="9" required></textarea>
-    <p class="hint">Go saves the definition and runs the selected builder
-      on every student in <code>&lt;work-folder&gt;/transcripts</code>, in the background; the result is then
-      published to out-folder. A changed definition is this PC's own: its courses are
-      scored again, and those scores are not shared with other clients.</p>
+    <p class="hint" id="category-update-hint">Confirm saves the edited text as this account's own
+      (private) definition of the category, on every computer of the account; it uses one of the
+      account's Adds and Updates. Its courses are scored again for this account. Reset goes back to the
+      shared text; Cancel changes nothing.</p>
     <div class="dialog-actions">
-      <button type="submit" id="category-update-go">Go</button>
+      <button type="submit" id="category-confirm">Confirm</button>
+      <button type="button" id="category-reset" class="secondary" hidden>Reset</button>
       <button type="button" id="category-update-cancel" class="secondary">Cancel</button>
     </div>
   </form>
@@ -78,6 +76,10 @@
       <button type="submit" id="category-add-go">Go</button>
       <button type="button" id="category-add-cancel" class="secondary">Cancel</button>
     </div>
+    <p class="hint">Go asks an AI (<span id="category-steps">category-definer</span>) to define the
+      category, unless the cloud server already has it; the definition becomes the shared one,
+      used by every account. A new category uses one of the account's Adds and Updates
+      (taking one the server already has uses none).</p>
   </form>
 
   <div id="category-progress" class="progress" hidden>
@@ -85,15 +87,10 @@
     <p class="hint" id="category-progress-text"></p>
   </div>
 
-  {% if dev %}<p class="hint">Definitions live in <code id="category-path"></code>, one
-    <code>&lt;CAT&gt;.json</code> each (<code>definitions-folder</code> in config.yaml). A new
-    category is taken from the cloud when it has one; otherwise category-definer drafts it and
-    the draft becomes the shared one.</p>
-  {% else %}<p class="hint">Categories come from the cloud server, and new ones appear here by
-    themselves. Build runs the selected category for every student in
-    <code>&lt;work-folder&gt;/transcripts</code> and publishes the result to out-folder. For a new
-    category, ask the package owner.</p>
-  {% endif %}
+  <p class="hint">Go builds the selected category for every student in
+    <code>&lt;work-folder&gt;/transcripts</code>, in the background, and publishes the result to
+    out-folder.{% if dev %} This computer's copy of the definitions is in <code id="category-path"></code>,
+    one <code>&lt;CAT&gt;.json</code> each (<code>definitions-folder</code> in config.yaml).{% endif %}</p>
 </fieldset>
 <div id="category-status" class="status" role="status" aria-live="polite" hidden></div>
 </section>
@@ -182,24 +179,26 @@
 })();
 
 
-// run_mode (config.yaml): prod takes definitions only from the cloud and builds; dev also drafts and edits.
+// run_mode (config.yaml): dev also shows the builder and the definitions folder.
 const DEV = {{ "true" if dev else "false" }};
 
 (() => {
   const $ = (id) => document.getElementById(id);
   const builderSelect = $("builder-select");
   const select = $("category-select"), updateButton = $("category-update"), addButton = $("category-add");
-  const buildButton = $("category-build");  // run_mode prod only
+  const buildButton = $("category-build");
   const definitionBox = $("category-definition");
   const updateForm = $("category-update-form"), text = $("category-text");
+  const confirmButton = $("category-confirm"), resetButton = $("category-reset");
   const addForm = $("category-add-form"), nameInput = $("category-name");
   const progressBox = $("category-progress"), bar = $("category-progress-bar");
   const progressText = $("category-progress-text"), status = $("category-status");
-  let categories = {}, names = [], definerSteps = [], origins = {};
+  let categories = {}, names = [], definerSteps = [], sources = {}, ais = {};
+  let n = null, cloud = false, blocked = "";  // blocked: why cloud actions cannot run now
   let poller = null;
   let action = null;  // the active button: "update", "add" or none
 
-  // textContent throughout: definitions are LLM output and hand edits.
+  // textContent throughout: definitions are AI output and hand edits.
   function showStatus(kind, parts) {
     if (!kind) { status.hidden = true; return; }
     const box = document.createElement("div");
@@ -215,7 +214,8 @@ const DEV = {{ "true" if dev else "false" }};
     const data = await response.json().catch(() => ({ error: `server returned ${response.status}` }));
     if (!response.ok) {
       const err = new Error(data.error || `server returned ${response.status}`);
-      err.data = data;  // e.g. the definer's attempts
+      err.data = data;  // e.g. the definer's attempts, the server's current text
+      err.status = response.status;
       throw err;
     }
     return data;
@@ -237,11 +237,14 @@ const DEV = {{ "true" if dev else "false" }};
     for (const [k, v] of Object.entries(fields)) body.append(k, v);
     return { method: "POST", body };
   };
+  const updatesLeft = () => !cloud || !n || n.left === null || n.left > 0;
+  const nText = () => !cloud || !n ? "" : n.limit === null ? "Adds and Updates: no limit."
+    : `Adds and Updates left: ${n.left} of ${n.limit}.`;
 
   // ---- modes: what sits under the action bar ------------------------------
-  // view: the selected definition, read-only. update: it, editable.
-  // add: the Name box. busy: a draft or run is in progress (bar locked);
-  // the button that started it stays highlighted.
+  // view: the selected definition, read-only, and Go. update: it, editable, with
+  // Confirm / Reset / Cancel (Go hidden). add: the Name box. busy: a draft, save or
+  // run is in progress (bar locked); the button that started it stays highlighted.
   function setMode(mode) {
     if (mode !== "busy") action = mode === "view" ? null : mode;
     updateButton.setAttribute("aria-pressed", action === "update");
@@ -250,17 +253,26 @@ const DEV = {{ "true" if dev else "false" }};
     definitionBox.hidden = mode === "update" || action === "add";
     updateForm.hidden = mode !== "update";
     addForm.hidden = mode !== "add";
+    buildButton.hidden = !names.length || action === "update";
     const busy = mode === "busy";
-    // While Update or Add is active, the other button and the dropdown are off;
+    const off = !!blocked;
+    const name = select.value;
+    // While Update or Add is active, the other buttons and the dropdown are off;
     // the active button stays usable (to close it) unless a draft or run is going.
-    updateButton.disabled = busy || action === "add";
-    if (buildButton) buildButton.disabled = busy;
-    addButton.disabled = busy || action === "update";
+    updateButton.disabled = busy || off || action === "add"
+      || (action !== "update" && !updatesLeft() && sources[name] !== "private");
+    const none = !updatesLeft() ? "No Add or Update left for this account (ask the package owner)" : "";
+    updateButton.title = addButton.title = none;
+    buildButton.disabled = busy || off || action !== null;
+    addButton.disabled = busy || off || action === "update" || (action !== "add" && !updatesLeft());
+    confirmButton.disabled = busy || !updatesLeft();
+    resetButton.hidden = sources[name] !== "private";
+    resetButton.disabled = busy;
     select.disabled = builderSelect.disabled = busy || action !== null;
     progressBox.hidden = !busy;
     if (mode === "update") {
-      $("category-update-name").textContent = select.value;
-      text.value = categories[select.value];
+      $("category-update-name").textContent = name;
+      text.value = categories[name];
       text.focus();
     } else if (mode === "add") {
       nameInput.focus();
@@ -273,57 +285,61 @@ const DEV = {{ "true" if dev else "false" }};
 
   function render(selected) {
     const empty = !names.length;
-    select.hidden = empty;
-    if (DEV) updateButton.hidden = empty; else buildButton.hidden = empty;
+    select.hidden = updateButton.hidden = empty;
     select.replaceChildren(...names.map((name) => new Option(name, name)));
     // The first category unless one is asked for.
     if (selected && names.includes(selected)) select.value = selected;
     definitionBox.textContent = !empty ? categories[select.value]
-      : DEV ? "No categories yet. Use Add to take one from the cloud or have category-definer draft one."
-      : "No categories yet: the cloud server could not be reached, or has none. Reload to try again.";
-    const origin = empty ? null : origins[select.value];
-    $("category-origin").hidden = !origin;
-    $("category-origin-text").textContent = origin === "cloud"
-      ? "Shared: the cloud's definition, so its scores are shared with other clients."
-      : "This PC's own definition (not the cloud's shared one): its scores are not shared.";
-    $("category-use-cloud").hidden = origin !== "local";
+      : "No categories yet. Add asks an AI to define one (or takes the cloud's).";
+    $("category-n").textContent = nText();
+    const source = empty ? null : sources[select.value], ai = empty ? null : ais[select.value];
+    $("category-origin").hidden = !source;
+    $("category-origin").textContent = (source === "private"
+      ? "This account's own (private) definition: used on every computer of the account; its scores are this account's."
+      : source === "shared" ? `Shared definition${ai && ai !== "legacy" ? ` (drafted by ${ai})` : ""}: used by every account that has not changed it.`
+      : "This computer's own definition (no cloud).");
+  }
+
+  function showConnection(data) {
+    const c = data.connection || {}, box = $("category-connection");
+    blocked = !data.cloud && c.state === "off" ? "" :
+      ["busy", "expired", "blocked", "signed-out"].includes(c.state) ? (c.detail || c.state) : "";
+    const message = blocked || data.warning || "";
+    box.hidden = !message;
+    box.textContent = message;
+    box.className = message ? "error" : "hint";
   }
 
   async function load(selected) {
     const data = await call("/categories");
     categories = data.categories || {};
-    origins = data.origins || {};
+    sources = data.sources || {};
+    ais = data.ai || {};
+    n = data.n || null;
+    cloud = !!data.cloud;
     names = data.names || Object.keys(categories);
     definerSteps = data.definer || [];
+    $("category-steps").textContent = definerSteps.join(", then ") || "category-definer";
     if ($("category-path")) $("category-path").textContent = data.path;
     if (!builderSelect.options.length) {  // kept across reloads: the user's pick wins
       builderSelect.replaceChildren(...(data.builders || []).map((b) => new Option(b, b)));
       builderSelect.value = data.active_builder;
     }
-    // The Name box (dev) suggests the defined names.
+    // The Name box suggests the defined names.
     $("category-suggestions").replaceChildren(...names.map((name) => new Option(name)));
+    showConnection(data);
     render(selected);
   }
 
   select.addEventListener("change", () => { render(select.value); setMode("view"); });
-  $("category-use-cloud").addEventListener("click", async () => {
-    const name = select.value;
-    try {
-      await call("/categories/use-cloud", post({ name }));
-      await load(name);
-      showStatus("ok", `${name} now uses the cloud's shared definition.`);
-    } catch (err) {
-      showStatus("error", `Error: ${err.message}`);
-    }
-  });
   updateButton.addEventListener("click", () => setMode(updateForm.hidden ? "update" : "view"));
   addButton.addEventListener("click", () => {
     if (addForm.hidden) { addForm.reset(); setMode("add"); } else { setMode("view"); }
   });
-  $("category-update-cancel").addEventListener("click", () => setMode("view"));
+  $("category-update-cancel").addEventListener("click", () => { showStatus(null); setMode("view"); });
   $("category-add-cancel").addEventListener("click", () => setMode("view"));
 
-  // ---- Add -> Go: category-definer drafts, the draft is saved, then Update -
+  // ---- Add -> Go: the server's text, else an AI's draft, Added as the shared one -
   addForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const name = nameInput.value.trim().toUpperCase();
@@ -331,30 +347,77 @@ const DEV = {{ "true" if dev else "false" }};
     setMode("busy");
     const started = Date.now();
     const steps = definerSteps.join(", then ") || "category-definer";
-    const tick = () => progress((DEV
-      ? `Asking ${steps} to define ${name} (a Chrome window may open)… `
-      : `Looking up ${name} on the cloud server… `) + `${minutes((Date.now() - started) / 1000)}`);
+    const tick = () => progress(`Asking ${steps} to define ${name} (a Chrome window may open)… ` +
+      `${minutes((Date.now() - started) / 1000)}`);
     tick();
     const timer = setInterval(tick, 1000);
     try {
       const draft = await call("/categories/draft", post({ name }));
-      const saved = await call("/categories", post({ name: draft.name, definition: draft.definition }));
+      let how;
+      if (draft.existing) {
+        how = "is already defined; it is selected";
+      } else {
+        const saved = await call("/categories", post({ name: draft.name, definition: draft.definition, ai: draft.source }));
+        how = saved.created ? `was drafted by ${draft.source} and added as the shared definition`
+          : "was already on the cloud server (another account added it first); using that definition";
+      }
       await load(draft.name);
-      const failed = draft.attempts.filter((a) => a.error !== null);
-      const how = (draft.source === "cloud" || saved.shared === "taken") ? "taken from the cloud (the shared definition)"
-        : saved.shared === "created" ? `drafted by ${draft.source} and shared with the cloud`
-        : saved.shared === "adopted" ? `drafted by ${draft.source}, but another client shared one first; using theirs`
-        : `drafted by ${draft.source}; the cloud could not be reached, so it is shared later`;
-      showStatus("ok", [`${draft.name} ${how}. ` +
-        `Go runs the ${builderSelect.value} builder on it.`,
+      const failed = (draft.attempts || []).filter((a) => a.error !== null);
+      showStatus("ok", [`${draft.name} ${how}. Go builds it; Update makes this account's own version.`,
         ...(failed.length ? [attemptList(draft.attempts)] : [])]);
-      setMode("update");
+      setMode("view");
     } catch (err) {
       showStatus("error", [`Error: ${err.message}`,
         ...(err.data?.attempts ? [attemptList(err.data.attempts)] : [])]);
+      if (err.status === 423) await load().catch(() => {});
       setMode("add");
     } finally {
       clearInterval(timer);
+    }
+  });
+
+  // ---- Update -> Confirm / Reset / Cancel -----------------------------------
+  updateForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const name = select.value, definition = text.value.trim();
+    showStatus(null);
+    if (definition === categories[name]) { setMode("view"); return; }
+    setMode("busy");
+    progress(`Saving ${name}…`);
+    try {
+      await call("/categories/private", post({ name, definition }));
+      await load(name);
+      showStatus("ok", `${name} now uses this account's own definition. ${nText()} Go builds it.`);
+      setMode("view");
+    } catch (err) {
+      if (err.status === 409 && err.data?.definition) {
+        await load(name).catch(() => {});
+        setMode("update");
+        text.value = definition;  // the edit stays; the box above shows the server's text
+        definitionBox.hidden = false;
+        showStatus("error", `${err.message}`);
+        return;
+      }
+      if (err.status === 423 || err.status === 429) await load(name).catch(() => {});
+      showStatus("error", `Error: ${err.message}`);
+      setMode("update");
+      text.value = definition;  // keep the text so Confirm can be tried again
+    }
+  });
+  resetButton.addEventListener("click", async () => {
+    const name = select.value;
+    if (!confirm(`Go back to the shared definition of ${name}? This account's own text is dropped (the Update it used is not given back).`)) return;
+    showStatus(null);
+    setMode("busy");
+    progress(`Resetting ${name}…`);
+    try {
+      await call("/categories/private/reset", post({ name }));
+      await load(name);
+      showStatus("ok", `${name} uses the shared definition again. Go builds it.`);
+      setMode("view");
+    } catch (err) {
+      showStatus("error", `Error: ${err.message}`);
+      setMode("update");
     }
   });
 
@@ -367,25 +430,8 @@ const DEV = {{ "true" if dev else "false" }};
     watch(est);
   }
 
-  // ---- Update -> Go (dev): save the edit, then build ------------------------
-  updateForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const name = select.value, definition = text.value.trim(), builder = builderSelect.value;
-    showStatus(null);
-    try {
-      if (definition !== categories[name]) {
-        await call("/categories", post({ name, definition, replace: "1" }));
-        await load(name);
-      }
-      await startBuild(name, builder);
-    } catch (err) {
-      showStatus("error", `Error: ${err.message}`);
-      setMode("update");  // keep the text so Go can be tried again
-    }
-  });
-
-  // ---- Build (prod): build the selected category as it is ------------------
-  buildButton?.addEventListener("click", async () => {
+  // ---- Go: build the selected category as it is ----------------------------
+  buildButton.addEventListener("click", async () => {
     showStatus(null);
     try {
       await startBuild(select.value, builderSelect.value);
@@ -449,7 +495,6 @@ const DEV = {{ "true" if dev else "false" }};
     setMode("view");
     // A run started earlier (or in another tab) keeps reporting here.
     if (state.status === "running") {
-      action = "update";  // a run is what Update starts
       showProgress(state);
       watch();
     }

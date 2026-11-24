@@ -19,6 +19,18 @@ from .common import RunError
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+def _disconnect(raw: dict) -> None:
+    """Free the cloud account for another computer of it (one works at a time)."""
+    from .definitions import cloud_for
+
+    cloud = cloud_for(raw)
+    if cloud is not None and hasattr(cloud, "disconnect"):
+        try:
+            cloud.disconnect()
+        except Exception:  # noqa: BLE001  offline: the server frees it 30 minutes after the last request
+            pass
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m category_builder", description=__doc__)
     ap.add_argument("--category", required=True, help="category name, e.g. STEM")
@@ -39,6 +51,8 @@ def main(argv=None) -> int:
     except RunError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    finally:
+        _disconnect(raw)
     if args.publish:
         from out_builder import publish
 

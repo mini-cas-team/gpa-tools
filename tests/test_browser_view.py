@@ -12,7 +12,7 @@ from browser_view.app import create_app
 from category_builder import definer
 from category_builder.common import RunError
 
-from conftest import FakeDefiner, common_json
+from conftest import FakeCloud, FakeDefiner, common_json
 
 GPA_HEADER = ("student,institution,program,STEM_GPA,all_courses_GPA,"
               "stem_courses,total_courses,stem_all_pct,file\n")
@@ -331,7 +331,9 @@ def test_categories_list_the_definitions_repo(client, folders):
     data = client.get("/categories").get_json()
     repo = Path(data["path"])
     assert data == {"categories": {"STEM": "Science and maths."}, "names": ["STEM"],
-                    "path": str(repo), "origins": {"STEM": "local"},
+                    "path": str(repo), "sources": {"STEM": "local"}, "ai": {"STEM": None},
+                    "n": None, "cloud": False, "warning": None,
+                    "connection": {"state": "off", "detail": "", "email": "", "label": "", "n": None},
                     "builders": ["jev"], "active_builder": "jev",
                     "definer": ["chatgpt (window)", "gemini (window)"],
                     "mode": "dev"}
@@ -369,39 +371,43 @@ def test_draft_rejects_an_unknown_definer_mode(client, folders):
     assert client.get("/categories").get_json()["definer"] == []
 
 
-def test_save_writes_the_repo_and_leaves_config_alone(client, folders):
+def test_add_saves_an_ai_draft_and_leaves_config_alone(client, folders):
     config = folders[1]
     before = client.get("/categories").get_json()  # the first read moves the old section
     text = config.read_text()
-    r = client.post("/categories", data={"name": "business",
-                                         "definition": "  Edited: management, finance.  "})
+    typed = client.post("/categories", data={"name": "business", "definition": "My words."})
+    assert typed.status_code == 400 and "an AI's draft" in typed.get_json()["error"]
+    r = client.post("/categories", data={"name": "business", "ai": "gemini",
+                                         "definition": "  Drafted: management, finance.  "})
     body = r.get_json()
     assert body["categories"] == {"STEM": "Science and maths.",
-                                  "BUSINESS": "Edited: management, finance."}
-    # No cloud in this config: kept as this PC's own, offered to the cloud later.
-    assert (body["origin"], body["shared"]) == ("local", "pending")
+                                  "BUSINESS": "Drafted: management, finance."}
+    assert (body["source"], body["created"]) == ("local", True)  # no cloud in this config
     assert config.read_text() == text
     assert text.startswith("# my settings\ninput-folder:")
     assert "log-folder: /nowhere  # keep me" in text
     saved = json.loads((Path(before["path"]) / "BUSINESS.json").read_text())
-    assert saved["definition"] == "Edited: management, finance." and saved["pending"] is True
+    assert (saved["definition"], saved["ai"]) == ("Drafted: management, finance.", "gemini")
 
 
-def test_replace_needs_an_existing_category(client, folders):
-    r = client.post("/categories", data={"name": "stem", "definition": "Edited.", "replace": "1"})
+def test_confirm_needs_an_existing_category(client, folders):
+    r = client.post("/categories/private", data={"name": "stem", "definition": "Edited."})
     assert r.get_json()["categories"] == {"STEM": "Edited."}
-    r = client.post("/categories", data={"name": "LAW", "definition": "Law.", "replace": "1"})
+    r = client.post("/categories/private", data={"name": "LAW", "definition": "Law."})
     repo = Path(client.get("/categories").get_json()["path"])
     assert r.status_code == 404 and not (repo / "LAW.json").exists()
+    r = client.post("/categories/private/reset", data={"name": "STEM"})
+    assert r.status_code == 400 and "needs the cloud" in r.get_json()["error"]
 
 
 @pytest.mark.parametrize("path, form, status", [
     ("/categories/draft", {"name": "../x"}, 400),
     ("/categories/draft", {"name": "1ABC"}, 400),
     ("/categories/draft", {"name": "A" * 41}, 400),
-    ("/categories/draft", {"name": "stem"}, 409),
-    ("/categories", {"name": "STEM", "definition": "again"}, 409),
-    ("/categories", {"name": "LAW", "definition": " "}, 400),
+    ("/categories/draft", {"name": "stem"}, 200),  # defined: the existing text, no draft
+    ("/categories", {"name": "STEM", "definition": "again", "ai": "gemini"}, 409),
+    ("/categories", {"name": "LAW", "definition": " ", "ai": "gemini"}, 400),
+    ("/categories/private", {"name": "STEM", "definition": " "}, 400),
 ])
 def test_bad_category_requests_never_reach_the_definer(client, fake_gemini, path, form, status):
     assert client.post(path, data=form).status_code == status
@@ -410,51 +416,131 @@ def test_bad_category_requests_never_reach_the_definer(client, fake_gemini, path
 
 @pytest.fixture
 def prod(folders, monkeypatch):
-    """run_mode prod, with a cloud that shares STEM and LAW."""
+    """run_mode prod in jev cloud mode, signed in, with a cloud that shares STEM and LAW."""
     from category_builder import definitions as defs_module
-    from test_category_builder import FakeCloud
 
     config = folders[1]
-    config.write_text(config.read_text().replace("run_mode: dev", "run_mode: prod"))
+    config.write_text(config.read_text().replace("run_mode: dev", "run_mode: prod")
+                      + "category-builder:\n  jev:\n    mode: cloud\n    cloud-url: https://c.test\n")
     cloud = FakeCloud({"STEM": "Science and maths.", "LAW": "Law and legal studies."})
     monkeypatch.setattr(defs_module, "cloud_for", lambda raw: cloud)
+    monkeypatch.setenv("GPA_TOOLS_CLOUD_TOKEN", "gpak_test")  # signed in
     return cloud
 
 
-def test_prod_takes_every_cloud_category_by_itself_and_never_drafts(client, prod, fake_gemini, folders):
-    data = client.get("/categories").get_json()  # the first visit downloads the cloud's ones
-    assert (data["mode"], data["definer"]) == ("prod", [])
+def test_prod_follows_the_account_s_definitions_on_the_server(client, prod, folders):
+    data = client.get("/categories").get_json()  # the first action connects and downloads
+    assert (data["mode"], data["cloud"]) == ("prod", True)
+    assert data["connection"]["state"] == "connected" and prod.calls[0] == "connect"
     assert set(data["names"]) == {"STEM", "LAW"}
-    prod.shared["MATH"] = "Mathematics."  # shared by the owner later: the next visit has it
+    assert (data["sources"]["STEM"], data["ai"]["STEM"], data["n"]) == \
+        ("shared", "gemini", {"limit": 3, "used": 0, "left": 3})
+    # this config.yaml's old STEM went to the server as an Add (the server's text won)
+    prod.shared["MATH"] = "Mathematics."  # added by another account later: the next visit has it
+    prod.rev += 1
     data = client.get("/categories").get_json()
-    assert data["categories"]["MATH"] == "Mathematics." and data["origins"]["MATH"] == "cloud"
-    prod.shared["ART"] = "Art."  # even a direct save takes the cloud's text, not the posted one
-    r = client.post("/categories", data={"name": "ART", "definition": "My own words."}).get_json()
-    assert (r["definition"], r["origin"], r["shared"]) == ("Art.", "cloud", "taken")
-    del prod.shared["ART"]
-    # a new one: no draft, no typing
-    for path in ("/categories/draft", "/categories"):
-        r = client.post(path, data={"name": "DANCE", "definition": "Dance."})
-        assert r.status_code == 404 and "Ask the package owner" in r.get_json()["error"]
-    assert fake_gemini.defined == [] and prod.created == []
-    # no edits; going back to the cloud's text still works
-    r = client.post("/categories", data={"name": "STEM", "definition": "Edited.", "replace": "1"})
-    assert r.status_code == 403
-    assert client.get("/categories").get_json()["categories"]["STEM"] == "Science and maths."
+    assert data["categories"]["MATH"] == "Mathematics."
 
 
-def test_prod_page_hides_the_developer_parts(client, prod):
+def test_prod_add_drafts_with_an_ai_and_the_server_s_text_wins(client, prod, fake_gemini):
+    draft = client.post("/categories/draft", data={"name": "law"}).get_json()
+    assert (draft["existing"], draft["definition"]) == (True, "Law and legal studies.")
+    draft = client.post("/categories/draft", data={"name": "dance"}).get_json()
+    assert (draft["existing"], draft["source"], draft["definition"]) == (False, "gemini", "DANCE means science.")
+    saved = client.post("/categories", data={"name": "DANCE", "definition": draft["definition"],
+                                             "ai": "gemini"}).get_json()
+    assert (saved["created"], saved["source"]) == (True, "shared") and prod.created == ["DANCE"]
+    assert saved["n"] == {"limit": 3, "used": 1, "left": 2}  # a new category uses one N
+    prod.shared["ART"] = "Their art."  # another account added ART while this one drafted
+    saved = client.post("/categories", data={"name": "ART", "definition": "Mine.", "ai": "gemini"}).get_json()
+    assert (saved["created"], saved["definition"], saved["n"]["used"]) == (False, "Their art.", 1)  # free
+
+
+def test_prod_adds_and_updates_share_one_limit(client, prod, fake_gemini):
+    """3 by default: here two Adds and one Update; then neither, and no AI is asked."""
+    client.get("/categories")
+    for name in ("DANCE", "ART"):
+        draft = client.post("/categories/draft", data={"name": name}).get_json()
+        assert client.post("/categories", data={"name": name, "definition": draft["definition"],
+                                                "ai": "gemini"}).get_json()["created"]
+    r = client.post("/categories/private", data={"name": "STEM", "definition": "Mine."}).get_json()
+    assert r["n"] == {"limit": 3, "used": 3, "left": 0}
+    asked = list(fake_gemini.defined)
+    r = client.post("/categories/draft", data={"name": "MUSIC"})
+    assert r.status_code == 429 and "no Add or Update left" in r.get_json()["error"]
+    assert fake_gemini.defined == asked  # refused before a minute of drafting
+    r = client.post("/categories/private", data={"name": "LAW", "definition": "Only law."})
+    assert r.status_code == 429
+    r = client.post("/categories/draft", data={"name": "LAW"}).get_json()  # one that exists: free
+    assert r["existing"] is True
+    assert client.get("/categories").get_json()["n"]["left"] == 0
+
+
+def test_prod_update_confirm_reset_and_the_limit(client, prod):
+    prod.n_limit = 1
+    client.get("/categories")
+    r = client.post("/categories/private", data={"name": "STEM", "definition": "Science, maths, medicine."})
+    body = r.get_json()
+    assert (r.status_code, body["source"], body["n"]["left"]) == (200, "private", 0)
+    data = client.get("/categories").get_json()
+    assert (data["categories"]["STEM"], data["sources"]["STEM"], data["n"]["left"]) == \
+        ("Science, maths, medicine.", "private", 0)
+    over = client.post("/categories/private", data={"name": "LAW", "definition": "Only law."})
+    assert over.status_code == 429 and "no Add or Update left" in over.get_json()["error"]
+    # changed on another computer of the account since this page showed it
+    prod.n_limit = None
+    prod.private["STEM"] = "The other computer's."
+    r = client.post("/categories/private", data={"name": "STEM", "definition": "Mine again."})
+    assert r.status_code == 409 and r.get_json()["definition"] == "The other computer's."
+    assert client.post("/categories/private", data={"name": "STEM", "definition": "Mine again."}).status_code == 200
+    r = client.post("/categories/private/reset", data={"name": "STEM"}).get_json()
+    assert (r["source"], r["definition"]) == ("shared", "Science and maths.")
+
+
+def test_prod_another_computer_has_the_account(client, prod, folders):
+    prod.in_use = True
+    data = client.get("/categories").get_json()
+    assert data["connection"]["state"] == "busy" and "in use on pc2" in data["connection"]["detail"]
+    page = client.get("/transcripts/ftp-upload").get_data(as_text=True)
+    assert "in use on pc2" in page  # the side bar says so
+    r = client.post("/categories/private", data={"name": "STEM", "definition": "Mine."})
+    assert r.status_code == 423 and "in use on pc2" in r.get_json()["error"]
+    prod.in_use = None
+    # the next action, RETRY seconds later, connects again
+    client.application.cloud_session.last_try = 0
+    assert client.get("/categories").get_json()["connection"]["state"] == "connected"
+
+
+def test_the_connection_goes_idle_and_reconnects_on_the_next_action(client, prod, monkeypatch):
+    from browser_view import cloud_session
+
+    client.get("/categories")
+    session = client.application.cloud_session
+    assert session.snapshot()["state"] == "connected"
+    connects = prod.calls.count("connect")
+    client.get("/runs/status")  # a page's own poll is not an action
+    assert prod.calls.count("connect") == connects
+    session.last_activity -= cloud_session.IDLE + 1
+    assert session.snapshot()["state"] == "idle"
+    client.get("/transcripts/ftp-upload")
+    assert session.snapshot()["state"] == "connected" and prod.calls.count("connect") == connects + 1
+    session.disconnect()
+    assert prod.calls[-1] == "disconnect" and session.snapshot()["state"] == "idle"
+
+
+def test_the_upload_page_is_the_same_in_both_modes_but_prod_hides_the_developer_parts(client, prod):
     body = client.get("/transcripts/ftp-upload").get_data(as_text=True)
     assert '<label for="builder-select">' not in body and 'id="category-path"' not in body
-    assert "const DEV = false" in body and 'id="category-build" hidden>Build</button>' in body
-    assert ">Update</button>" not in body and ">Add</button>" not in body
+    assert "const DEV = false" in body
+    for button in (">Go</button>", ">Update</button>", ">Add</button>", ">Confirm</button>",
+                   ">Reset</button>", ">Cancel</button>"):
+        assert button in body
 
 
 def test_dev_page_shows_everything(client):
     body = client.get("/transcripts/ftp-upload").get_data(as_text=True)
     assert '<label for="builder-select">' in body and 'id="category-path"' in body
     assert "const DEV = true" in body and ">Update</button>" in body and ">Add</button>" in body
-    assert 'id="category-build"' not in body
 
 
 # --- runs -----------------------------------------------------------------------

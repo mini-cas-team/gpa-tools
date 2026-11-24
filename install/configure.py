@@ -77,7 +77,7 @@ category-builder:
   jev: # TypeSafe's Jev scores each course 0-1, through the gpa-tools cloud server
     mode: cloud # cloud: the gpa-tools cloud server holds the TypeSafe key; direct: TypeSafe with the key in api-key-env (development)
     cloud-url: https://gpa-tools-jev.johnprofessional132.workers.dev # mode cloud: the server
-    cloud-token-env: GPA_TOOLS_CLOUD_TOKEN # mode cloud: optional override; the token is ~/.gpa-tools/client_token (python -m jev_category.enroll)
+    cloud-token-env: GPA_TOOLS_CLOUD_TOKEN # mode cloud: optional override; the key is ~/.gpa-tools/client_token (python -m jev_category.login)
     model: jev-1.14.0 # a version pins it; `jev-latest` follows new releases
     api-url: https://api.typesafe.ai/v1/systemone
     api-key-env: GPA_TOOLS_KEY # name of the env var holding the key; never put the key here

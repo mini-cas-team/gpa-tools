@@ -8,7 +8,8 @@ config.yaml.  ``mode`` says how Jev is reached:
 
     cloud   through the gpa-tools cloud server (the private repo gpa-tools-cloud), which holds the
             TypeSafe key and shares course scores between clients; this
-            machine needs only a client token, in the variable cloud-token-env
+            machine needs only its key, got by signing in with the account's
+            email and password (login.py; or the variable cloud-token-env)
     direct  TypeSafe itself (development only); the API key is in the
             variable api-key-env; model and api-url apply only here
 
@@ -41,7 +42,7 @@ import category_builder
 from category_builder import definer
 from category_builder.common import RunError, load_students, write_outputs
 
-from .client import CloudClient, JevClient, JevError
+from .client import CloudClient, CloudError, JevClient, JevError
 from .store import ScoreCache
 
 NAME = "jev"
@@ -189,13 +190,13 @@ def api_key(cfg: dict) -> str:
 
 
 def cloud_token(cfg: dict) -> str:
-    """cloud-token-env when set, else ~/.gpa-tools/client_token, picked up from the server
-    once the owner approves this laptop's request (enroll.py); RunError with the notice else."""
-    from . import enroll
+    """cloud-token-env when set, else ~/.gpa-tools/client_token, the key this computer got by
+    signing in with its account (login.py); RunError with the notice else."""
+    from . import login
 
     try:
-        return enroll.token(cfg["token_env"])
-    except enroll.NoToken as exc:
+        return login.token(cfg["token_env"], cfg["cloud_url"])
+    except login.NoToken as exc:
         raise RunError(str(exc)) from None
 
 
@@ -225,27 +226,40 @@ def run(cfg: dict, category: str, limit: int | None = None, progress=None) -> Pa
     log.info("Loaded %d student(s) from %s", len(students), cfg["in"])
 
     jev = client(cfg)
+    if cfg["mode"] == "cloud":  # this account's current texts, even when every course is cached
+        from category_builder.definitions import Definitions
+        try:
+            Definitions(cfg["config"], cloud=jev).sync()
+        except JevError as exc:
+            raise _cloud_error(cfg, exc) from None
+        except OSError as exc:
+            raise RunError(f"Cannot reach {_where(cfg)}: {exc}") from None
     try:
         definition, how = definer.definition_for(cfg["config"], cfg["raw"], category)
     except OSError as exc:  # drafting a missing definition calls category-definer's model
         raise RunError(f"No definition for {category} and category-definer "
                        f"({definer.describe(definer.load_config(cfg['raw']))}) failed: {exc}") from None
+    except CloudError as exc:
+        raise _cloud_error(cfg, exc) from None
     if note := definer.describe_how(category, how, definition):
         log.info("%s", note)
     try:
         model = jev.model  # in cloud mode the server says which model answers
         log.info("Jev model %s via %s", model, _where(cfg))
-        cache = _cache(cfg, category, definition, model)
-        if cache.reset:
-            log.info("Definition or model changed since the last run; cached scores discarded.")
-        classify(students, category, definition, cache, jev, cfg["threshold"],
-                 cfg["batch_size"], progress)
+        for attempt in (1, 2):
+            cache = _cache(cfg, category, definition, model)
+            if cache.reset:
+                log.info("Definition or model changed since the last run; cached scores discarded.")
+            try:
+                classify(students, category, definition, cache, jev, cfg["threshold"],
+                         cfg["batch_size"], progress)
+                break
+            except CloudError as exc:
+                if exc.status != 409 or "definition" not in exc.body or attempt == 2:
+                    raise
+                definition = _server_text(cfg, category, exc.body)
     except JevError as exc:
-        hint = ""
-        if cfg["mode"] == "cloud" and str(exc).startswith("HTTP 401"):
-            hint = (" -- this laptop's token was revoked or is unknown: contact the package owner "
-                    "(a new one: python -m jev_category.enroll request --new --email <you>)")
-        raise RunError(f"{_where(cfg)}: {exc}{hint}") from None
+        raise _cloud_error(cfg, exc) from None
     except OSError as exc:  # URLError and socket timeouts are OSErrors
         raise RunError(f"Cannot reach {_where(cfg)}: {exc}") from None
 
@@ -253,3 +267,29 @@ def run(cfg: dict, category: str, limit: int | None = None, progress=None) -> Pa
     log.info("Wrote %s", gpa_csv)
     log.info("Wrote %s", courses_csv)
     return gpa_csv
+
+
+def _server_text(cfg: dict, category: str, body: dict) -> str:
+    """The server's text of ``category`` (a 409: this computer's copy was stale), kept in the copy."""
+    from category_builder.definitions import Definitions
+
+    Definitions(cfg["config"]).store(category, body)
+    text = (body.get("definition") or "").strip()
+    if not text:
+        raise RunError(f"The server has no {category} definition any more (the package owner "
+                       f"removed it): Add it again.")
+    log.info("%s's definition was changed on the server (another computer of this account, or "
+             "the package owner); building with the server's text:\n  %s", category, text)
+    return text
+
+
+def _cloud_error(cfg: dict, exc: JevError) -> RunError:
+    if isinstance(exc, CloudError) and exc.status == 423:
+        from . import login
+        return RunError(login.in_use(exc.body))
+    hint = ""
+    if cfg["mode"] == "cloud" and str(exc).startswith("HTTP 401"):
+        hint = " -- sign in again: browser_view's Sign in, or python -m jev_category.login"
+    elif cfg["mode"] == "cloud" and str(exc).startswith("HTTP 403"):
+        hint = " -- contact the package owner"
+    return RunError(f"{_where(cfg)}: {exc}{hint}")

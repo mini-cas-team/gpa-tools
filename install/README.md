@@ -39,8 +39,8 @@ $PY install/configure.py --tool-folder <folder it printed last>
 
 $PY install/configure.py --data ~/gpa-tools-data    # transcripts/ work/ out/ log/; jev in cloud mode
 
-$PY -m jev_category.enroll request --email you@school.edu   # this laptop's token: the owner approves it
-$PY -m jev_category.enroll status                           # approved?
+$PY -m jev_category.login --email you@school.edu   # this computer's key: asks your account's password
+$PY -m jev_category.login status                   # signed-in <email>?
 
 $PY -m browser_view                                 # http://127.0.0.1:5001
 ```
@@ -62,7 +62,7 @@ desktop, use `configure.py --definer-mode prod`.
 | venv | `.venv/` in the project |
 | definer's Chrome profiles | `<work-folder>/browser-profiles/` (`profile-folder:` under `category-definer:` to move them) |
 | poppler | `.tools/` in the project (git-ignored), listed under `tool-folders:` in config.yaml |
-| this laptop's cloud token | `~/.gpa-tools/` (`client_token`, or `pending_token` until approved) |
+| this computer's cloud key | `~/.gpa-tools/client_token` (and `account.json`: whose it is); made by `jev_category.login`, the password is never saved |
 | TypeSafe API key (direct mode, development only) | an environment variable (`GPA_TOOLS_KEY`) in the user's shell profile; config.yaml only names it |
 | config | `config.yaml` in the project (this machine's own, not in git; `configure.py` holds the template for a fresh one) |
 

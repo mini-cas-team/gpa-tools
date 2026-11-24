@@ -10,10 +10,10 @@ import pytest
 import jev_category.builder as jev_run
 import jev_core
 from category_builder.common import RunError
-from jev_category.client import CloudClient, JevClient, JevError
+from jev_category.client import CloudClient, CloudError, JevClient, JevError
 from letter_builder import rank_letters
 
-from conftest import common_json
+from conftest import FakeCloud, common_json
 
 FIXTURES = json.loads((Path(jev_core.__file__).with_name("fixtures.json")).read_text(encoding="utf-8"))
 
@@ -100,7 +100,7 @@ def test_mode_picks_the_client_and_needs_its_own_secret(monkeypatch):
     monkeypatch.setenv("GPA_TOOLS_KEY", "ts-key")
     assert isinstance(jev_run.client(settings()), JevClient)  # direct is the default
     cloud = settings(mode="Cloud", **{"cloud-url": "https://c.test"})
-    with pytest.raises(RunError, match="GPA_TOOLS_CLOUD_TOKEN"):
+    with pytest.raises(RunError, match=r"not signed in.*jev_category\.login.*https://c\.test/account"):
         jev_run.client(cloud)
     monkeypatch.setenv("GPA_TOOLS_CLOUD_TOKEN", "gpat_x")
     monkeypatch.delenv("GPA_TOOLS_KEY")
@@ -122,19 +122,8 @@ def test_cloud_run_stamps_the_cache_with_the_servers_model(tmp_path, monkeypatch
     cfg = jev_run.load_config(config)
     common_json(cfg["in"], "ann", [("MATH 1", "Calc", "A", 3, 4.0)])
 
-    class FakeCloud:
-        model = "jev-server"
-
-        def definitions(self):
-            return {}
-
-        def create_definition(self, category, definition):  # config.yaml's STEM, moved
-            return {"category": category, "definition": definition, "created": True}
-
-        def scores(self, category, definition, courses):
-            return [0.9] * len(courses), {"cached": 0, "asked": len(courses)}
-
-    monkeypatch.setattr(jev_run, "client", lambda cfg: FakeCloud())
+    cloud = FakeCloud({"STEM": "STEM means science."})
+    monkeypatch.setattr(jev_run, "client", lambda cfg: cloud)
     jev_run.run(cfg, "STEM")
     cache = jev_run.ScoreCache(cfg["folder"] / "cache_stem.json", "STEM means science.", "jev-server")
     assert not cache.reset and cache.get("MATH 1", "Calc") == 0.9
@@ -169,34 +158,81 @@ def test_seed_uploads_a_matching_cache_in_chunks(tmp_path, monkeypatch, capsys):
         seed.main(["--category", "STEM", "--config", str(config)])
 
 
-def test_cloud_run_takes_the_clouds_definition_when_the_repo_has_none(tmp_path, monkeypatch):
+def _cloud_config(tmp_path):
     config = tmp_path / "config.yaml"
     config.write_text(f"work-folder: {tmp_path / 'work'}\nlog-folder: {tmp_path / 'log'}\n"
                       "category-builder:\n  jev:\n    mode: cloud\n    cloud-url: https://c.test\n",
                       encoding="utf-8")
     cfg = jev_run.load_config(config)
     common_json(cfg["in"], "ann", [("MATH 1", "Calc", "A", 3, 4.0)])
-    asked = []
+    return cfg
 
-    class FakeCloud:
-        model = "jev-server"
 
-        def definitions(self):
-            return {}  # the repo is made before the cloud has STEM
-
-        def definition(self, category):
-            return "Shared STEM." if category == "STEM" else None
-
-        def scores(self, category, definition, courses):
-            asked.append(definition)
-            return [0.9] * len(courses), {}
-
-    monkeypatch.setattr(jev_run, "client", lambda cfg: FakeCloud())
+def test_cloud_run_takes_the_clouds_definition_when_the_copy_has_none(tmp_path, monkeypatch):
+    cfg = _cloud_config(tmp_path)
+    cloud = FakeCloud({"STEM": "Shared STEM."})
+    monkeypatch.setattr(jev_run, "client", lambda cfg: cloud)
     monkeypatch.setattr(jev_run.definer, "draft", lambda *a, **k: pytest.fail("must not draft"))
     jev_run.run(cfg, "STEM")
-    assert asked == ["Shared STEM."]
+    assert cloud.asked == ["Shared STEM."]
     saved = json.loads((tmp_path / "work" / "definitions" / "STEM.json").read_text(encoding="utf-8"))
-    assert (saved["definition"], saved["origin"]) == ("Shared STEM.", "cloud")
+    assert (saved["definition"], saved["source"]) == ("Shared STEM.", "shared")
+
+
+def test_a_build_with_a_stale_copy_uses_the_server_s_text(tmp_path, monkeypatch, caplog):
+    """Another computer of the account changed STEM: the server's 409 brings the new text."""
+    caplog.set_level("INFO", "jev_category")
+    cfg = _cloud_config(tmp_path)
+    cloud = FakeCloud({"STEM": "Shared STEM."})
+    monkeypatch.setattr(jev_run, "client", lambda cfg: cloud)
+    jev_run.run(cfg, "STEM")
+    cloud.private["STEM"] = "My STEM."  # Confirmed on the other computer
+    cloud.rev += 1
+    jev_run.run(cfg, "STEM")  # the build refreshes the copy first
+    assert cloud.asked == ["Shared STEM.", "My STEM."]
+    saved = json.loads((tmp_path / "work" / "definitions" / "STEM.json").read_text(encoding="utf-8"))
+    assert (saved["definition"], saved["source"]) == ("My STEM.", "private")
+    # a copy that is wrong anyway (edited by hand): the server's 409 brings its text
+    path = tmp_path / "work" / "definitions" / "STEM.json"
+    path.write_text(json.dumps({**saved, "definition": "Hand edit."}), encoding="utf-8")
+    jev_run.run(cfg, "STEM")
+    assert json.loads(path.read_text(encoding="utf-8"))["definition"] == "My STEM."
+    assert "changed on the server" in caplog.text
+
+
+def test_a_build_while_another_computer_has_the_account_says_so(tmp_path, monkeypatch):
+    cfg = _cloud_config(tmp_path)
+    cloud = FakeCloud({"STEM": "Shared STEM."})
+    monkeypatch.setattr(jev_run, "client", lambda cfg: cloud)
+    jev_run.run(cfg, "STEM")
+    cloud.in_use = True
+    with pytest.raises(RunError, match=r"in use on pc2\. Try again after \d\d:\d\d"):
+        jev_run.run(cfg, "STEM")
+
+
+def test_cloud_client_connects_and_keeps_the_error_body(monkeypatch):
+    busy = {"error": "in use on pc2", "in_use": {"label": "pc2", "until": "2026-11-22T11:12:00Z"}}
+    server = FakeServer([{"email": "a@b.c", "rev": "1.0", "definitions": {}, "entries": {}, "n": {}},
+                         {"released": True},
+                         http_error(423, json.dumps(busy)),
+                         http_error(429, json.dumps({"error": "no Update left", "n": {"left": 0}})),
+                         http_error(429, json.dumps({"error": "daily limit reached for a@b.c"}))])
+    monkeypatch.setattr("jev_category.client.urllib.request.urlopen", server)
+    c = CloudClient("https://c", "t")
+    assert c.connect(since="1.0")["email"] == "a@b.c"
+    assert server.sent[0][:2] == ("POST", "https://c/v1/connect?since=1.0")
+    assert c.disconnect() is True and server.sent[1][0] == "DELETE"
+    with pytest.raises(CloudError) as e:
+        c.listing()
+    assert (e.value.status, e.value.body["in_use"]["label"]) == (423, "pc2")
+    with pytest.raises(CloudError) as e:
+        c.set_private("STEM", "Mine.", "Shared.")
+    assert (e.value.status, e.value.body["n"]) == (429, {"left": 0})
+    assert server.sent[3][:2] == ("PUT", "https://c/v1/definitions/STEM/private")
+    assert server.sent[3][3] == {"definition": "Mine.", "base": "Shared."}
+    with pytest.raises(CloudError, match="daily limit"):  # not retried: waiting does not help
+        c.scores("STEM", "Def.", [("MATH 1", "Calc")])
+    assert len(server.sent) == 5
 
 
 def test_cloud_client_definition_is_none_on_404(monkeypatch):
@@ -215,7 +251,8 @@ def test_cloud_client_lists_and_creates_definitions(monkeypatch):
     monkeypatch.setattr("jev_category.client.urllib.request.urlopen", server)
     c = CloudClient("https://c", "t")
     assert c.definitions() == {"STEM": "S.", "LAW": "L."}
-    assert c.create_definition("art", "Art.") == {"category": "ART", "definition": "Art.", "created": True}
+    assert c.create_definition("art", "Art.", "gemini") == {"category": "ART", "definition": "Art.", "created": True}
     assert server.sent[1][1] == "https://c/v1/definitions/ART"
+    assert server.sent[1][3] == {"definition": "Art.", "source": "gemini"}
     with pytest.raises(JevError, match="unexpected answer"):
         c.create_definition("art", "Art.")

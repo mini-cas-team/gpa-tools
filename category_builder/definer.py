@@ -9,8 +9,8 @@ the steps, tried in turn until one gives a definition (MODES):
 
 chatgpt and gemini are their free web chats, used anonymously through
 category_definition_builder in the installed Chrome or Edge (``browser``);
-they get ``retries`` extra tries each.  When every step fails there is no draft:
-the user types the definition (the Upload tab's Add box).
+they get ``retries`` extra tries each.  When every step fails there is no draft and no
+category (a shared definition is always an AI's).
 
     category-definer:
       mode: dev
@@ -29,8 +29,6 @@ from pathlib import Path
 
 from category_definition_builder import Draft, DraftFailed, define
 
-from . import run_mode
-from .common import RunError
 from .definitions import Definitions
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -141,17 +139,15 @@ def record(cfg: dict, category: str, attempts, source: str | None) -> None:
 
 
 def definition_for(config_path: Path, cfg: dict, category: str) -> tuple[str, str]:
-    """``category``'s definition from the local repo, else the cloud's shared one, else
-    a new draft (offered to the cloud first; see definitions.py).
+    """``category``'s definition from this computer's copy, else the server's (the copy is
+    refreshed), else a new AI draft, Added to the server as the shared one (see definitions.py).
 
-    Returns (definition, how): how is "repo", "cloud" or "drafted".  In run_mode prod
-    there is no draft: a category the cloud does not have is a RunError.
+    Returns (definition, how): how is "repo", "cloud" or "drafted".  DraftFailed (an OSError)
+    when every AI step fails: then there is no category.
     """
-    def new_draft() -> str:
-        if run_mode(cfg) != "dev":
-            raise RunError(f"No definition for {category} on the cloud server. Ask the package "
-                           f"owner to add it (drafting is for run_mode: dev).")
-        return draft(cfg, category).definition
+    def new_draft() -> tuple[str, str]:
+        result = draft(cfg, category)
+        return result.definition, result.source
     return Definitions(config_path).resolve(category, new_draft)
 
 
@@ -160,6 +156,6 @@ def describe_how(category: str, how: str, definition: str) -> str | None:
     if how == "cloud":
         return f"No local definition for {category}; copied the cloud's shared one:\n  {definition}"
     if how == "drafted":
-        return (f"No definition for {category} locally or in the cloud; category-definer drafted "
-                f"one and it was saved (and offered to the cloud):\n  {definition}")
+        return (f"No definition for {category} here or on the server; category-definer drafted "
+                f"one and it was added to the server:\n  {definition}")
     return None

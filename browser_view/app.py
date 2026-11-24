@@ -5,10 +5,11 @@
 Upload > Transcripts converts uploaded PDFs (saved in <input-folder>/transcripts,
 or every PDF already there) to <name>.txt and <name>.common.json (with per-course
 GPA) in <work-folder>/transcripts -- the input every category builder reads.  A
-Category Build panel beside it lists the local definitions repo and adds
-a category: category-definer drafts a definition, the operator edits and
-saves it, and after a time estimate the selected builder runs on it in the
-background; out_builder then publishes the result to out-folder.  View reads
+Category Build panel beside it lists the account's definitions (this computer's copy,
+refreshed from the cloud server): Add has an AI draft a new one (the shared text), Update ->
+Confirm / Reset makes or drops the account's own text, and Go runs the selected builder on it
+in the background; out_builder then publishes the result to out-folder.  In jev cloud mode
+one computer of an account works at a time (cloud_session.py).  View reads
 one builder's ``<cat>_gpa.csv`` from <work-folder>/<builder>/ and shows it as
 a sortable table; clicking a student opens their course list (from
 ``<cat>_courses.csv``) beside the original PDF.
@@ -20,9 +21,11 @@ files from the configured folders.  Do not expose it to a network.
 from __future__ import annotations
 
 import csv
+import ipaddress
 import json
 import logging
 import re
+import os
 import shutil
 import tempfile
 import threading
@@ -32,12 +35,16 @@ from urllib.parse import urlencode
 
 import yaml
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_file
+from urllib.parse import urlsplit
 
 import category_builder
 import folders
 from category_builder import definer
 from category_builder.common import RunError, courses_csv_name
-from category_builder.definitions import Definitions
+from category_builder.definitions import Definitions, cloud_mode
+from jev_core import JevError
+
+from .cloud_session import CloudSession
 from letter_builder import RANKS_CSV, letters_folder, letters_work_folder, rank_letters, students as letter_students
 from letter_builder.students import student_key
 import rank_ai
@@ -307,6 +314,54 @@ def _dev_mode(cfg: dict) -> bool:
 VIEW_COMPONENTS = ("transcripts", "letters", "personal")
 
 
+
+def _cloud(cfg: dict, session=None) -> dict | None:
+    """The side bar's cloud sign-in state in jev cloud mode, else None: {url, account,
+    email, signed_in, from_env, conn}; conn is the connection (cloud_session.CloudSession
+    snapshot).  Read from this computer's files and memory only (no server call per page)."""
+    from jev_category import builder as jev_builder, login
+
+    try:
+        jev = jev_builder.jev_settings(cfg)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if jev["mode"] != "cloud" or not jev["cloud_url"]:
+        return None
+    try:
+        login.token(jev["token_env"])
+        signed_in = True
+    except login.NoToken:
+        signed_in = False
+    return {"url": jev["cloud_url"].rstrip("/"), "account": login.account_page(jev["cloud_url"]),
+            "email": login.account().get("email", "") if signed_in else "", "signed_in": signed_in,
+            "from_env": bool(os.environ.get(jev["token_env"], "").strip()),
+            "conn": session.snapshot() if session else None}
+
+
+def _local_host(host: str) -> bool:
+    """A Host header this app answers: an IP address or localhost, never a name.  A page on
+    another site whose name was pointed at 127.0.0.1 (DNS rebinding) carries its own name."""
+    name = urlsplit(f"//{host}").hostname or ""
+    if name == "localhost":
+        return True
+    try:
+        ipaddress.ip_address(name)
+    except ValueError:
+        return False
+    return True
+
+
+def _same_origin_request() -> bool:
+    """A request that changes something must come from this app's own pages: another site's
+    page in the same browser sends its Origin (and Sec-Fetch-Site: cross-site)."""
+    site = request.headers.get("Sec-Fetch-Site")
+    if site and site not in ("same-origin", "none"):
+        return False
+    origin = request.headers.get("Origin")
+    if origin and origin != "null":
+        return urlsplit(origin).netloc == request.host
+    return origin != "null"
+
 def _shown_components(cfg: dict) -> set[str]:
     """The components whose View page, Rank column and Config row are shown: all of
     them in dev run_mode; in prod only those with data (summary.names.components_with_data)."""
@@ -318,7 +373,6 @@ def _shown_components(cfg: dict) -> set[str]:
         return set()
 
 
-NOT_ON_CLOUD = "{name} is not on the cloud server. Ask the package owner to add it."
 
 
 def _student_letters(transcript: str, cfg: dict) -> dict:
@@ -400,10 +454,75 @@ def create_app(config_path: Path | None = None) -> Flask:
     # Every page's column names: M.state and the like explain themselves on hover.
     app.jinja_env.globals.update(field_hint=profile_display.hint, profile_hints=profile_display.HINTS)
 
+    # One computer per account at a time: connects on the first action, renews while the
+    # operator works, idle after 30 minutes (cloud_session.py).
+    session = CloudSession(config_path, working=lambda: any(
+        j.snapshot().get("status") == "running" for j in (job, letter_job)))
+    app.cloud_session = session
+
     @app.context_processor
     def _view_nav():
-        """shown: the components whose View pages the side bar lists (_shown_components)."""
-        return {"shown": _shown_components(_load_config(config_path))}
+        """shown: the components whose View pages the side bar lists (_shown_components);
+        cloud: this computer's sign-in and connection state for the side bar (_cloud)."""
+        cfg = _load_config(config_path)
+        return {"shown": _shown_components(cfg), "cloud": _cloud(cfg, session)}
+
+    @app.before_request
+    def _guard():
+        """Only this computer's own pages may use the app (it has no login of its own):
+        a Host that is a name (DNS rebinding) is refused, and so is a change (POST and the
+        like) sent by another site's page."""
+        if not _local_host(request.host):
+            abort(403, "this app answers only on 127.0.0.1 / localhost")
+        if request.method not in ("GET", "HEAD", "OPTIONS") and not _same_origin_request():
+            abort(403, "a request from another site")
+
+    @app.before_request
+    def _activity():
+        """The operator's action (a page or a click; not a page's own status poll, not the
+        Sign in/out themselves) keeps this computer connected to the cloud."""
+        if request.endpoint in (None, "static", "account_sign_in", "account_sign_out") \
+                or request.path.endswith("/status"):
+            return
+        session.touch()
+
+    @app.get("/account/status")
+    def account_status():
+        """This computer's cloud sign-in, checked with the server: {state, detail, email, account}."""
+        from jev_category import login
+        cloud = _cloud(_load_config(config_path))
+        if cloud is None:
+            return jsonify(state="off", detail="the jev builder is not in cloud mode")
+        state, detail = login.status(cloud["url"])
+        return jsonify(state=state, detail=detail, email=detail if state == "signed-in" else "",
+                       account=cloud["account"], from_env=cloud["from_env"], connection=session.snapshot())
+
+    @app.post("/account/sign-in")
+    def account_sign_in():
+        """Sign this computer in with the account's email and password (jev_category.login).
+        The password goes to the cloud server and is not kept; only the key is saved."""
+        from jev_category import login
+        cloud = _cloud(_load_config(config_path))
+        if cloud is None:
+            return jsonify(error="the jev builder is not in cloud mode"), 400
+        email = (request.form.get("email") or "").strip()
+        password = request.form.get("password") or ""
+        if not email or not password:
+            return jsonify(error="enter the email and the password"), 400
+        try:
+            who = login.sign_in(cloud["url"], email, password)
+        except login.SignInError as exc:
+            return jsonify(error=str(exc), account=cloud["account"]), 401 if exc.status in (401, 403) else 502
+        log.info("signed in to %s as %s (key %s)", cloud["url"], who["email"], who["id"])
+        return jsonify(**who, connection=session.snapshot() if session.connect() else None)
+
+    @app.post("/account/sign-out")
+    def account_sign_out():
+        from jev_category import login
+        cloud = _cloud(_load_config(config_path))
+        login.sign_out(cloud["url"] if cloud else None)  # the revoked key frees the account
+        session.connect()  # -> signed-out
+        return jsonify(signed_out=True)
 
     @app.get("/")
     def welcome():
@@ -431,31 +550,67 @@ def create_app(config_path: Path | None = None) -> Flask:
             raise ValueError(CATEGORY_NAME_RULE)
         return name
 
+    def cloud_reply(exc) -> tuple:
+        """A cloud error as the page's {error, ...} answer and status."""
+        from jev_category import login
+        from jev_category.client import CloudError
+        if isinstance(exc, CloudError):
+            if exc.status == 423:
+                session.connect()
+                return jsonify(error=login.in_use(exc.body), in_use=True), 423
+            detail = str(exc).split(": ", 1)[-1]
+            if exc.status == 401:
+                detail += " -- sign in again (the side bar's Sign in)"
+            return jsonify(error=detail, n=exc.body.get("n")), exc.status if exc.status in (403, 404, 409, 429) else 502
+        if isinstance(exc, OSError):
+            return jsonify(error=f"cannot reach the cloud server: {getattr(exc, 'reason', exc)}"), 502
+        return jsonify(error=str(exc)), 502
+
+    def cloud_blocked():
+        """The page's answer when this computer cannot use the cloud now (another computer has
+        the account, the key expired, the email is blocked); None when it can."""
+        snap = session.snapshot()
+        status = {"busy": 423, "expired": 401, "blocked": 403}.get(snap["state"])
+        return (jsonify(error=snap["detail"], in_use=snap["state"] == "busy"), status) if status else None
+
+    def defs_now(sync: bool = False):
+        """This computer's copy of the definitions; ``sync``: refreshed from the server first
+        (a warning instead when it cannot be asked)."""
+        definitions = Definitions(config_path)
+        warning = None
+        if sync and definitions.cloud is not None:
+            try:
+                definitions.sync()
+                session.update_n(definitions.n)
+            except (JevError, OSError) as exc:
+                warning = cloud_reply(exc)[0].get_json()["error"]
+        elif sync and cloud_mode(_load_config(config_path)):
+            warning = "Not signed in to the cloud: the side bar's Sign in."
+        return definitions, warning
+
     @app.get("/categories")
     def list_categories():
-        """{name: definition} from the local definitions repo, with each one's origin
-        (cloud: the shared text; local: this PC's own) and the run_mode.  In prod the
-        cloud's categories this PC doesn't have yet are saved into the repo first.
+        """{name: definition} from this computer's copy of its account's definitions (refreshed
+        from the server first), with each one's source (shared: an AI's text, shared by every
+        account; private: this account's own; local: no cloud) and the AI that drafted it, n
+        (the account's Updates: {limit, used, left}), the connection, and the run_mode.
 
-        ``names`` keeps the repo's order (jsonify sorts the object's keys).
+        ``names`` keeps the copy's order (jsonify sorts the object's keys).
         """
         try:
-            definitions = Definitions(config_path)
+            definitions, warning = defs_now(sync=True)
             data = definitions.data
             cfg = _load_config(config_path)
             dev = _dev_mode(cfg)
             try:
-                steps = definer.step_names(definer.load_config(cfg)) if dev else []
+                steps = definer.step_names(definer.load_config(cfg))
             except ValueError:
                 steps = []  # a bad mode: the draft request reports it
-            if not dev:  # prod: the cloud's newer categories join the repo by themselves
-                for name, text in sorted(definitions.cloud_definitions().items()):
-                    if name not in data:
-                        definitions.set(name, text, origin="cloud")
-                        log.info("category %s taken from the cloud into %s", name, definitions.folder)
-                data = definitions.data
             return jsonify(categories=data, names=list(data), path=str(definitions.folder),
-                           origins={c: definitions.origin(c) for c in data},
+                           sources={c: definitions.source(c) for c in data},
+                           ai={c: definitions.entries[c].get("ai") for c in data},
+                           n=definitions.n or session.snapshot()["n"], cloud=definitions.cloud is not None,
+                           connection=session.snapshot(), warning=warning,
                            builders=category_builder.names(),
                            active_builder=category_builder.active(cfg), definer=steps,
                            mode="dev" if dev else "prod")
@@ -464,21 +619,25 @@ def create_app(config_path: Path | None = None) -> Flask:
 
     @app.post("/categories/draft")
     def draft_category():
-        """A definition for a new category: the cloud's shared one when it has one
-        (source "cloud"), else (run_mode dev only) category-definer's draft. Nothing is saved."""
+        """Add, step one: the category's text when the server already has it (``existing``),
+        else an AI's draft (category-definer: chatgpt / gemini).  Nothing is saved."""
+        if blocked := cloud_blocked():
+            return blocked
         try:
             name = category_name(request.form.get("name"))
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
-        definitions = Definitions(config_path)
+        definitions, warning = defs_now(sync=True)
+        if warning and definitions.cloud is not None:
+            return jsonify(error=warning), 502
         if name in definitions.data:
-            return jsonify(error=f"{name} is already defined"), 409
-        shared = definitions.cloud_definition(name)
-        if shared is not None:
-            return jsonify(name=name, definition=shared, source="cloud", attempts=[])
+            return jsonify(name=name, definition=definitions.data[name], source=definitions.source(name),
+                           existing=True, attempts=[])
+        n = definitions.n or {}
+        if definitions.cloud is not None and n.get("left") == 0:  # before a minute of drafting
+            return jsonify(error=f"no Add or Update left for this account ({n.get('used')} of "
+                                 f"{n.get('limit')} used): ask the package owner for more", n=n), 429
         cfg = _load_config(config_path)
-        if not _dev_mode(cfg):
-            return jsonify(error=NOT_ON_CLOUD.format(name=name)), 404
         try:
             definer.load_config(cfg)
         except ValueError as exc:
@@ -487,22 +646,51 @@ def create_app(config_path: Path | None = None) -> Flask:
             draft = definer.draft(cfg, name)
         except definer.DraftFailed as exc:
             # Every try failed; the page lists them (they are in category_definer.log too).
-            return jsonify(error=f"category-definer could not draft {name}: every step failed",
+            return jsonify(error=f"no AI could draft {name} (every step failed), so there is no "
+                                 f"{name} category; try again later",
                            attempts=[a.to_dict() for a in exc.attempts]), 502
-        return jsonify(name=name, definition=draft.definition, source=draft.source,
+        return jsonify(name=name, definition=draft.definition, source=draft.source, existing=False,
                        attempts=[a.to_dict() for a in draft.attempts])
 
     @app.post("/categories")
     def save_category():
-        """Save a definition into the local definitions repo.
+        """Add, step two: an AI's draft (``ai``: the step that wrote it) of a new category,
+        offered to the server as the shared text.  The server's answer is kept: this draft,
+        or (``created`` false, using no N) the text it already had.  A new category uses one
+        of the account's N (Adds and Updates together; 429 when none is left)."""
+        if blocked := cloud_blocked():
+            return blocked
+        try:
+            name = category_name(request.form.get("name"))
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        definition = (request.form.get("definition") or "").strip()
+        ai = (request.form.get("ai") or "").strip().lower()
+        if not definition:
+            return jsonify(error="the definition is empty"), 400
+        if ai not in definer.PROVIDERS:
+            return jsonify(error=f"a new category's definition is an AI's draft "
+                                 f"({', '.join(definer.PROVIDERS)}), not {ai or 'typed'}"), 400
+        definitions = Definitions(config_path)
+        if name in definitions.data:
+            return jsonify(error=f"{name} is already defined"), 409
+        try:
+            entry = definitions.add(name, definition, ai)
+        except (JevError, OSError) as exc:
+            return cloud_reply(exc)
+        session.update_n(definitions.n)
+        log.info("category %s added (%s, %s)", name, ai, "new" if entry["created"] else "the server's")
+        return jsonify(name=name, categories=definitions.data, source=entry["source"],
+                       created=entry["created"], definition=entry["definition"], n=definitions.n)
 
-        A new name (offered to the cloud, whose shared text wins; ``shared`` says
-        created, adopted or pending) unless ``replace=1`` (Update, an existing one:
-        a local override unless it equals the cloud's text).
-
-        run_mode prod: no edits (403), and a new name is saved only as the cloud's
-        shared text; the posted definition is not used.
-        """
+    @app.post("/categories/private")
+    def confirm_category():
+        """Update -> Confirm: the edited text becomes this account's private text of the
+        category (one of the account's N, Adds and Updates together).  409 with the server's
+        text when it was changed on another computer meanwhile; 429 when none is left."""
+        from category_builder.definitions import Changed
+        if blocked := cloud_blocked():
+            return blocked
         try:
             name = category_name(request.form.get("name"))
         except ValueError as exc:
@@ -511,44 +699,41 @@ def create_app(config_path: Path | None = None) -> Flask:
         if not definition:
             return jsonify(error="the definition is empty"), 400
         definitions = Definitions(config_path)
-        replace = request.form.get("replace") == "1"
-        if replace and name not in definitions.data:
+        if name not in definitions.data:
             return jsonify(error=f"{name} is not defined"), 404
-        if not replace and name in definitions.data:
-            return jsonify(error=f"{name} is already defined"), 409
-        if not _dev_mode(_load_config(config_path)):
-            if replace:
-                return jsonify(error="editing definitions is for run_mode: dev; this PC uses "
-                                     "the cloud's shared ones"), 403
-            shared = definitions.cloud_definition(name)
-            if shared is None:
-                return jsonify(error=NOT_ON_CLOUD.format(name=name)), 404
-            entry = definitions.set(name, shared, origin="cloud")
-            log.info("category %s taken from the cloud into %s", name, definitions.folder)
-            return jsonify(name=name, categories=definitions.data, origin="cloud",
-                           shared="taken", definition=entry["definition"])
         try:
-            entry = definitions.update(name, definition) if replace \
-                else definitions.publish(name, definition)
-        except (OSError, ValueError) as exc:
-            return jsonify(error=f"could not save to {definitions.folder}: {exc}"), 500
-        log.info("category %s saved to %s (%s)", name, definitions.folder, entry["origin"])
-        return jsonify(name=name, categories=definitions.data, origin=entry["origin"],
-                       shared=entry.get("shared"), definition=entry["definition"])
+            entry = definitions.confirm(name, definition)
+        except Changed as exc:
+            return jsonify(error=f"{name} was changed on another computer of this account (or by "
+                                 f"the package owner) since it was shown: here is the current text. "
+                                 f"Confirm again to replace it.", definition=exc.entry.get("definition"),
+                           source=exc.entry.get("source")), 409
+        except (JevError, OSError) as exc:
+            return cloud_reply(exc)
+        session.update_n(definitions.n)
+        log.info("category %s: %s text saved", name, entry["source"])
+        return jsonify(name=name, categories=definitions.data, source=entry["source"],
+                       definition=entry["definition"], n=definitions.n)
 
-    @app.post("/categories/use-cloud")
-    def use_cloud_category():
-        """Replace this PC's definition of a category with the cloud's shared one."""
+    @app.post("/categories/private/reset")
+    def reset_category():
+        """Update -> Reset: drop this account's private text; the shared one again."""
+        if blocked := cloud_blocked():
+            return blocked
         try:
             name = category_name(request.form.get("name"))
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
         definitions = Definitions(config_path)
-        entry = definitions.use_cloud(name)
-        if entry is None:
-            return jsonify(error=f"the cloud has no {name} definition (or cannot be reached)"), 404
-        return jsonify(name=name, categories=definitions.data, origin="cloud",
-                       definition=entry["definition"])
+        try:
+            entry = definitions.reset(name)
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except (JevError, OSError) as exc:
+            return cloud_reply(exc)
+        log.info("category %s: back to the shared text", name)
+        return jsonify(name=name, categories=definitions.data, source=entry.get("source"),
+                       definition=entry.get("definition"), n=definitions.n)
 
     def chosen_builder(raw: str | None):
         """(name, module, its config) for the builder a request names, else the active one."""
@@ -574,6 +759,8 @@ def create_app(config_path: Path | None = None) -> Flask:
 
     @app.post("/runs")
     def start_run():
+        if blocked := cloud_blocked():
+            return blocked
         try:
             name = category_name(request.form.get("category"))
             builder, _, cfg = chosen_builder(request.form.get("builder"))
@@ -1131,8 +1318,8 @@ def setup_logging(cfg: dict) -> Path:
 
 
 def _cloud_token_notice(config_path: Path) -> None:
-    """At start, in cloud mode: pick up an approved token (jev_category.enroll), or print
-    the notice that this laptop has none yet.  The UI still starts either way."""
+    """At start, in cloud mode: print the notice when this computer is not signed in to the
+    cloud (jev_category.login).  The UI still starts either way, with its Sign in button."""
     from jev_category import builder as jev_builder
 
     try:
@@ -1158,6 +1345,11 @@ def main(argv: list[str] | None = None) -> int:
     log_path = setup_logging(_load_config(args.config))
     _cloud_token_notice(args.config)
     app = create_app(args.config)
+    state = app.cloud_session.connect()  # takes the account and downloads its definitions
+    if state not in ("off", "signed-out", "connected"):
+        print(f"NOTICE: cloud: {app.cloud_session.snapshot()['detail']}")
+    import atexit
+    atexit.register(app.cloud_session.disconnect)  # frees the account for another computer
     print(f"Browser View on http://{args.host}:{args.port} (log: {log_path})")
     app.run(host=args.host, port=args.port, debug=args.debug)
     return 0

@@ -224,10 +224,8 @@ def test_check_reports_cloud_mode_without_revealing_the_token(monkeypatch, gpa_t
     info = check.jev_info(cfg)
     assert {k: info[k] for k in ("mode", "cloud-url", "cloud-token-env", "token_set")} == \
         {"mode": "cloud", "cloud-url": "https://c.test", "cloud-token-env": "TOK", "token_set": False}
-    assert info["token_from"].startswith("none")
+    assert info["token_from"] == "not signed in (python -m jev_category.login)"
     gpa_tools_home.mkdir()
-    (gpa_tools_home / "pending_token").write_text("gpat_waiting")
-    assert check.jev_info(cfg)["token_from"].startswith("requested")
     (gpa_tools_home / "client_token").write_text("gpat_fromfile\n")
     seen = []
     monkeypatch.setattr(check, "probe_cloud", lambda url, token: seen.append(token) or {"model": "m"})

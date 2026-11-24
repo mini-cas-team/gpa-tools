@@ -31,8 +31,8 @@ There are two branches:
 
 | | branch | for | settings |
 |---|---|---|---|
-| **Production** | `prod`: released versions only | everyone using gpa-tools | `run_mode: prod`: categories come only from the cloud server, no drafting or editing, developer details hidden |
-| **Development** | `master`: the latest code | the few developers | `run_mode: dev`: everything, including drafting new categories for the cloud |
+| **Production** | `prod`: released versions only | everyone using gpa-tools | `run_mode: prod`: developer details hidden (the builder choice, the definitions folder, Jev's letter rank) |
+| **Development** | `master`: the latest code | the few developers | `run_mode: dev`: everything |
 
 Production: install git and Python 3.14 or 3.12 first, then run the installer
 from the gpa-tools cloud server (run it again later to update):
@@ -46,8 +46,9 @@ irm https://gpa-tools-jev.johnprofessional132.workers.dev/install.ps1 | iex     
 ```
 
 It clones `prod` into `~/gpa-tools`, builds the venv, installs pdftotext if missing,
-writes config.yaml (data in `~/gpa-tools-data`) and asks for this laptop's cloud
-token with your email; the package owner approves it. With an AI agent (Claude
+writes config.yaml (data in `~/gpa-tools-data`) and signs this computer in with
+your gpa-tools account: your email and password. Make the account first, on the
+cloud server's [account page](https://gpa-tools-jev.johnprofessional132.workers.dev/account). With an AI agent (Claude
 Code, Codex, ...), point it at `https://gpa-tools-jev.johnprofessional132.workers.dev/SKILL.md`, the same install as a skill (Claude
 Code: save it as `~/.claude/skills/install-gpa-tools/SKILL.md`). The installers live
 in the private repo gpa-tools-cloud (`public/`), not here.
@@ -75,7 +76,7 @@ and with no admin rights:
 - the venv (Python 3.14 or 3.12) and packages (Playwright among them; it drives the installed Chrome or Edge)
 - pdftotext (into `.tools/`, if it's missing)
 - `config.yaml`: folders and the cloud server, set by `install/configure.py`
-- this laptop's cloud token: it asks with your email, and the package owner approves it
+- this computer's sign-in: your account's email and password; the computer gets its own key
 
 No local model, no GPU and no multi-GB downloads: the heavy work is Jev's, in the cloud.
 
@@ -97,7 +98,7 @@ python3.14 -m venv .venv                        # or python3.12
 .venv/bin/pip install -r requirements.txt
 sudo apt install poppler-utils                  # pdftotext
 .venv/bin/python install/configure.py --data ~/gpa-tools-data
-.venv/bin/python -m jev_category.enroll request --email you@school.edu
+.venv/bin/python -m jev_category.login --email you@school.edu   # asks the password
 ```
 
 ## Usage
@@ -195,31 +196,42 @@ Builders provide data, not a ranking: there is no rank column and no one is
 left out. Rank by sorting the View tab's columns, or however the application
 reading the CSV wants.
 
-**Definitions** are shared by every builder and kept in the local definitions
-repo, `definitions-folder`: one `<CAT>.json` per category. A category gets its
-definition in this order:
+**Definitions** are shared by every builder. The cloud server holds them, per account (an
+email):
 
-1. **The repo has it:** it's used.
-2. **The cloud has it:** the cloud's shared definition is copied into the repo.
-3. **Neither has it:** `category-definer` drafts one, and the draft is offered to
-   the cloud. The first client's draft becomes the shared definition for every
-   client and is never replaced. If another client shared one first, theirs is
-   used instead. If the cloud can't be reached, the draft is kept as this PC's
-   own and offered the next time it is used.
+- A **shared** definition is an AI's text (ChatGPT or Gemini through `category-definer`,
+  more may come). **Add** asks the AI for a new category and offers its draft to the server;
+  the first text of a category is the shared one, used by every account. If the category
+  is already on the server, its text is used and nothing is drafted. When every AI step
+  fails there is no category (try again later).
+- A **private** definition is an account's own edit of a category. **Update** makes the text
+  editable; **Confirm** saves it as the account's own text, on every computer of the
+  account; **Reset** goes back to the shared text.
+- **Adds and Updates are limited per account: 3 together** by default (the server's
+  `N_LIMIT`; the owner sets an email's own). An Add that makes a new category uses one, and
+  so does a Confirm with a new text. Taking a category the server already has, an Add where
+  every AI step fails, and Reset use none, and Reset doesn't give one back. With none left,
+  Add and Update are off and only Go (build) works. The server counts them, whichever
+  computer of the account asks.
+- Jev scores a category only with the account's current text of it, so every build uses
+  it. Scores are shared by everyone who sends the same text.
 
-The cloud's definition is the default, so every client sends the same text and
-shares the same Jev scores. Editing a definition (Update) makes it this PC's own:
-its courses are scored again, and those scores aren't shared. **Use cloud
-version** goes back to the shared text.
+Each computer keeps a copy in `definitions-folder` (default `<work-folder>/definitions`),
+one `<CAT>.json` per category with its `source` (shared or private) and the AI that
+drafted it. browser_view refreshes it from the server when it connects (at start, and on
+the first action after 30 idle minutes) and when the Upload tab lists the categories, and
+every build refreshes it first. If a build's text is still not the server's (another
+computer of the account changed it a moment ago), the server says so and the build uses the
+server's text.
 
-When the folder doesn't exist yet (a new PC, or an upgrade), it is made. An
-older `config.yaml`'s `category-definitions:` section is moved into it and
-replaced by `definitions-folder:`. Every cloud definition is downloaded.
+When the folder doesn't exist yet it is made; an older `config.yaml`'s
+`category-definitions:` section is moved into it and replaced by `definitions-folder:`. On
+the first refresh, texts that were this computer's own (an older copy's `origin: local`)
+are offered to the server (a draft as an Add, an edit as the account's private text) and
+kept in `definitions/old-local/`.
 
-The cloud is used only when `category-builder: jev:` is in `mode: cloud` with
-its token set. Otherwise the repo is all there is. Drafting is separate from
-building, so it uses its own sources: the web chats below. When they all fail,
-type the definition yourself in the Upload tab's Add box.
+Without the cloud (`category-builder: jev: mode: direct`, development only) the folder is
+all there is: Add and Confirm save there, and there is no Reset or N.
 
 The definer's `mode` picks its steps. It moves on whenever a step fails or
 its reply has no usable definition, and ChatGPT and Gemini get one retry each
@@ -264,9 +276,9 @@ two ways (`mode`):
 
 - **cloud** (production): through the gpa-tools cloud server at `cloud-url`
   (a Cloudflare Worker; its code is in the private repo `gpa-tools-cloud`). The
-  TypeSafe key lives only there. This laptop needs only its own client token in
-  `~/.gpa-tools/client_token`, approved by the package owner (see
-  [This laptop's token](#this-laptops-token)).
+  TypeSafe key lives only there. This computer needs only its own key in
+  `~/.gpa-tools/client_token`, from signing in with a gpa-tools account (see
+  [Accounts and keys](#accounts-and-keys)).
   The server keeps every course score it has asked Jev for and shares it with
   every client using the same definition, so a course one client paid for is
   free for the rest. The questions are in `jev_core/prompts.json`; the server
@@ -341,26 +353,27 @@ its own scroll bar.
   in `<input-folder>/transcripts`. Uploaded PDFs are saved there (they are input),
   so View can open them. Each becomes `.txt` and `.common.json` in
   `<work-folder>/transcripts`, as with `python -m upload`.
-- *Right, Category Build:* an action bar of **Builder** and **Category** (dropdowns),
-  **Update** and **Add**. Builder starts on `active-category-builder`. With no
-  definitions yet, only Add is shown.
-  - The dropdown shows the selected category's definition, read-only, and
-    whether it is *shared* (the cloud's) or *this PC's own*. An own one has a
-    **Use cloud version** button.
-  - **Update** makes the definition editable, with **Go** and **Cancel**. Go
-    saves the text to the repo and runs the selected builder in the
-    background, with a progress bar and time left, then publishes the result
-    to out-folder. When it finishes, the panel shows the definition the run
-    used and an *Open in View* link.
-  - **Add** shows a **Name** box with **Go** and **Cancel**. Go takes the
-    cloud's shared definition when it has one. Otherwise it asks
-    category-definer for a draft (about a minute through ChatGPT or Gemini,
-    longer when it falls back; the progress line names the steps) and offers
-    it to the cloud. It saves the result to the repo and switches to Update
-    before building. The result names who drafted it, and failed tries are listed
-    under it.
-  - While Update or Add is active, the other button and the dropdown are
+- *Right, Category Build:* an action bar of **Builder** (dev only) and **Category**
+  (dropdowns), **Go**, **Update** and **Add**. Builder starts on `active-category-builder`.
+  With no definitions yet, only Add is shown. Production and development work the same.
+  - The dropdown shows the selected category's definition, read-only, whether it is
+    *shared* (and which AI drafted it) or *this account's own*, and the Adds and Updates left.
+  - **Go** runs the selected builder on the category in the background, with a progress
+    bar and time left, then publishes the result to out-folder and shows an *Open in View*
+    link.
+  - **Update** makes the definition editable and hides Go, with **Confirm** (save it as this
+    account's own text; uses one Update), **Reset** (only for an own text: back to the shared
+    one) and **Cancel**. After any of them Go shows again. If another computer of the account
+    changed the text meanwhile, Confirm shows the server's text and keeps the edit, to
+    confirm again. With no Add or Update left, Update and Add are disabled.
+  - **Add** shows a **Name** box with **Go** and **Cancel**. Go takes the server's
+    definition when it has one; otherwise it asks category-definer for a draft (about a
+    minute; the progress line names the steps) and adds it to the server as the shared one.
+    The result names the AI, and failed tries are listed under it.
+  - While Update or Add is active, the other buttons and the dropdown are
     disabled. One run at a time is allowed.
+  - When another computer of the account is using the cloud, the panel (and the side bar)
+    says so, and Go, Update and Add wait until it is free.
 
 **View tab.** Pick a **Builder** and a **Category**; it reads
 `<work-folder>/<builder>/<cat>_gpa.csv` and shows every student. Click a column
@@ -554,8 +567,8 @@ In production gpa-tools runs in two places:
 |---|---|---|
 | Runs | everything: upload, builders, letters, profiles, the web UI | only the Jev calls |
 | Code | Python (this repo, public) | JavaScript: a Cloudflare Worker, or plain Node for testing |
-| Secret | a client token (`~/.gpa-tools/client_token`) | the TypeSafe API key, and the admin token |
-| Keeps | transcripts, letters, profiles, every CSV, its own score cache | course scores shared by all clients, definitions, tokens, usage |
+| Secret | its own key (`~/.gpa-tools/client_token`), from signing in | the TypeSafe API key, the admin token, the password pepper, the mail account |
+| Keeps | transcripts, letters, profiles, every CSV, its own score cache | course scores shared by all clients, definitions, accounts and keys, usage per email |
 
 `jev_core/prompts.json` holds the Jev questions. The server and the client's
 direct mode both use it, and tests on both sides check that they build the same
@@ -568,7 +581,7 @@ Its code, deploy steps and a local test server (`npm start`, port 8787) are in t
 private repo `gpa-tools-cloud`; a laptop needs none of it.
 
 ```bash
-.venv/bin/python -m browser_view       # http://127.0.0.1:5001 (the laptop's token: below)
+.venv/bin/python -m browser_view       # http://127.0.0.1:5001 (signing in: below)
 ```
 
 ```yaml
@@ -581,68 +594,96 @@ category-builder:
 ```
 
 `.venv/bin/python install/check.py --text` reports whether the server answers
-and accepts the token. Every jev build or letter ranking needs the server
+and accepts this computer's key. Every jev build or letter ranking needs the server
 running. Without it, the run stops with "Cannot reach the gpa-tools cloud at
 ...". To switch back, set `mode: direct`.
 
-### This laptop's token
+### Accounts and keys
 
-Each laptop has its own client token, kept in `~/.gpa-tools/` (folder `chmod 700`,
-files `600`; `GPA_TOOLS_HOME` moves it), never in the repo or `config.yaml`. The laptop
-makes the token itself, and the package owner approves it:
+Every user has one **account**, identified by their email, and every computer they use
+signs in with it and gets its **own key**. The server links every key to the email, and
+every limit counts by the email, whichever computer asks.
+
+1. **Make the account** on the cloud server's `/account` page: enter the email, type the
+   6-digit code the server emails, then choose a password (at least 10 characters).
+2. **Sign each computer in** with that email and password: the installer does it at the
+   end, browser_view has **Sign in** in its side bar, or by hand:
+
+   ```bash
+   .venv/bin/python -m jev_category.login --email you@school.edu   # asks the password
+   .venv/bin/python -m jev_category.login status                   # signed-in <email> | expired | blocked | none
+   .venv/bin/python -m jev_category.login logout                   # this computer's key is revoked
+   ```
+
+   The server makes a new key (`gpak_...`), keeps only its sha256, and sends it once. The
+   computer saves it in `~/.gpa-tools/client_token` (folder `700`, files `600`;
+   `GPA_TOOLS_HOME` moves it), with `account.json` saying whose it is. The password is never
+   saved on the computer; the server keeps only a salted, peppered hash of it.
+3. **A key stops working** after 90 days without use, when it is revoked (on the account
+   page, by the owner, or by `logout`), or when the password is reset, which signs every
+   computer out. The run then stops with "sign in again", and the computer signs in again.
+
+**One computer at a time.** The computer that uses the cloud holds the account until 30
+minutes after its last request (the server's `ACTIVE_MINUTES`). Another computer of the same
+account meanwhile gets "This account is in use on <computer>. Try again after <time>", and
+its builds, Add and Update wait. browser_view connects when it starts and on the first
+action (a page or a click) after 30 idle minutes; that also downloads the account's
+definitions. It frees the account when it stops, and signing out frees it at once. A
+command-line build frees it when it ends. No password is asked again: the key stays.
+
+The account page also lists the computers (with **Revoke**), the Jev questions used
+today, the Adds and Updates used and the computer using the account now. **Forgot password** on the same page emails a code and sets a new password.
+`GPA_TOOLS_CLOUD_TOKEN` (the variable `cloud-token-env` names) wins over the file, for testing.
+
+The package owner sees every account on the server's `/admin` page, or here (with the
+server's admin token in `GPA_TOOLS_CLOUD_ADMIN_TOKEN`):
 
 ```bash
-# on the laptop, at install
-.venv/bin/python -m jev_category.enroll request --email you@school.edu
-# on the owner's PC (needs GPA_TOOLS_CLOUD_ADMIN_TOKEN)
-.venv/bin/python -m jev_category.admin requests            # id, date, email, hostname
-.venv/bin/python -m jev_category.admin approve <id>        # or: reject <id>
-.venv/bin/python -m jev_category.admin revoke <email>:<hostname>
+.venv/bin/python -m jev_category.admin users                                   # accounts, computers, Jev today, Adds + Updates, in use on
+.venv/bin/python -m jev_category.admin user you@school.edu --daily-limit 200   # or: default
+.venv/bin/python -m jev_category.admin user you@school.edu --n-limit 5         # Adds + Updates; none = no limit; default
+.venv/bin/python -m jev_category.admin user you@school.edu --n-used 0          # gives the used Adds + Updates back
+.venv/bin/python -m jev_category.admin user you@school.edu --release           # frees the account for another computer
+.venv/bin/python -m jev_category.admin user you@school.edu --block             # every computer stops; --unblock
+.venv/bin/python -m jev_category.admin revoke-key <id>                         # one computer stops
+.venv/bin/python -m jev_category.admin definitions                             # shared ones, and each email's own
+.venv/bin/python -m jev_category.admin definitions --set STEM --text "..."     # the shared text; --delete STEM
 ```
 
-- **At install,** `request` makes a random token and saves it in
-  `~/.gpa-tools/pending_token`. It sends the server only the token's sha256, the
-  email and the hostname, and saves what it sent in `request.json`.
-- **Every time gpa-tools starts** (the web UI, a build, a letter ranking):
-  - If `client_token` is not empty, it is used.
-  - Otherwise gpa-tools asks the server about the request, looked up by the hash, so
-    only this laptop can ask. Once the request is approved, `pending_token` becomes
-    `client_token`.
-  - Until then, the web UI prints a NOTICE and jev runs stop with "No gpa-tools cloud
-    token on this laptop: … Contact the package owner to approve <email>:<hostname>."
-- **The token never leaves the laptop.** No token is emailed or copied.
-- **A revoked laptop** (a 401) asks again with `request --new --email …`. Approving
-  the new request also revokes the laptop's old token.
-- **For testing,** `GPA_TOOLS_CLOUD_TOKEN` (the variable `cloud-token-env` names) wins
-  over the files.
-
-`enroll status` prints `pending`, `approved` or `rejected`, and
-`install/check.py --text` shows where the token comes from.
+A laptop that had a token from the old approval flow (before 2026-11-22) keeps working:
+the server turns it into a key of its email the first time it is used. The person makes the
+account later with the same email, and the account then lists that laptop too.
 
 ### What is sent: building a category GPA
 
 Only course codes, course titles and the category definition leave the machine.
 Student names, grades, credits and GPAs never do; the GPA is computed locally.
 
-| Request (each with `Authorization: Bearer <client token>`) | When | Sends | Gets back |
+| Request (each with `Authorization: Bearer <key>`) | When | Sends | Gets back |
 |---|---|---|---|
+| `POST /v1/keys` (no key yet) | signing in | the account's email and password, this computer's name | this computer's key |
 | `GET /v1/info` | once per build | nothing | the Jev model, which stamps the local cache |
-| `GET /v1/definitions` | once, when the definitions repo is made | nothing | every shared definition |
-| `GET /v1/definitions/<CAT>` | only when the repo has no definition | nothing | the shared definition (saved to the repo), else 404 |
-| `POST /v1/definitions/<CAT>` | after a new draft | `definition` | the shared one: this draft when it was first (`created: true`), else the earlier client's |
+| `POST /v1/connect` | browser_view's start, its first action after 30 idle minutes, and every 5 minutes while it is used | the copy's revision | the account's definitions when they changed, its Updates; or 423 "in use on ..." |
+| `GET /v1/definitions` | the Upload tab, and before every build | the copy's revision | the same |
+| `POST /v1/definitions/<CAT>` | Add, after an AI's draft | `definition`, `source` (the AI) | the shared one: this draft when it was first (`created: true`), else the text the server had |
+| `PUT /v1/definitions/<CAT>/private` | Update → Confirm | `definition`, `base` (the text shown) | the account's own text and its Updates; 429 when none is left, 409 when it was changed elsewhere |
+| `DELETE /v1/definitions/<CAT>/private` | Update → Reset | nothing | the shared text again |
+| `DELETE /v1/connect` | browser_view stops, a command-line build ends | nothing | the account is free for another computer |
 | `POST /v1/courses/score` | for courses not in the local cache, `batch-size` (20) per request | `category`, `definition`, `courses: [[code, title], ...]` | `scores` in the same order, and `usage`: `cached`, `asked`, tokens |
 
 ### What is kept where
 
 | File | Where | Holds |
 |---|---|---|
-| `<work>/definitions/<CAT>.json` | client | the definitions repo: text, `origin` (cloud or this PC's own), `pending` |
+| `<work>/definitions/<CAT>.json`, `.sync.json` | client | the copy of the account's definitions: text, `source` (shared or private), `ai`; whose copy and its revision |
 | `<work>/jev/cache_<cat>.json` | client | scores for the courses on this machine's transcripts |
 | `<work>/jev/<cat>_courses.csv` | client | every course of every student, with `is_<cat>` and its score |
 | `<work>/jev/<cat>_gpa.csv` | client | one row per student: category GPA, all-courses GPA, counts, % (published to out-folder) |
 | `<work>/letters/<name>.txt`, `letter_ranks.csv` | client | letter text, and each letter's rank and confidence |
 | `scores/<model>/<CAT>/<sha256(definition)[:16]>.json` | server | the same `"CODE\|title": score` map, from all clients |
-| `definitions/<CAT>.json`, `tokens.json`, `usage/<day>/<token hash>.json` | server | shared definitions (the first client's, never replaced), token hashes, daily Jev questions per token |
+| `definitions.json`, `private/<email hash>.json` | server | the shared definitions (an AI's first text; only the owner changes one) and each account's own |
+| `users/<email hash>.json`, `keys/<key hash>.json` | server | accounts (password hash, own daily limit and Updates, blocked, the computer using it now) and every computer's key (hash only) |
+| `usage/<day>/<email hash>.json` | server | Jev questions per email per day |
 
 The server's files are in its R2 bucket (and in `data/` of the private repo when it runs locally).
 
@@ -659,7 +700,7 @@ When you click Go in Category Build (or run `python -m jev_category`):
    (a changed definition is a different file, so a different question). It looks
    each course up as `CODE|title`.
 4. **Server:** asks Jev only for the courses that no client has scored yet, after
-   counting them against the token's daily limit. It saves the new scores, then
+   counting them against the email's daily limit (all its computers together). It saves the new scores, then
    answers with all of them. When Jev fails, nothing is saved, and the build
    stops with the error.
 
@@ -700,8 +741,8 @@ jev_category/     the jev builder (python -m jev_category)
   builder.py      load_config / run / estimate; client(cfg) picks cloud or direct
   client.py       CloudClient (the cloud server) and JevClient (TypeSafe, direct mode)
   store.py        score cache
-  enroll.py       this laptop's cloud token: request, then picked up once approved
-  admin.py        the package owner's side: list, approve, reject, revoke
+  login.py        this computer's cloud key: sign in with the account's email and password
+  admin.py        the package owner's side: accounts, daily limits, block, revoke a key
   seed.py         upload local scores to the cloud's shared store
 out_builder/      publish <cat>_gpa.csv to out-folder (python -m out_builder)
 letter_builder/   recommendation letters: pdf2txt, then rank_letters with Jev
@@ -721,11 +762,41 @@ tests/
 The tests need neither pdftotext, a browser, TypeSafe nor the cloud server: all
 are replaced by fakes. The cloud server's tests are in its own repo. They cover
 transcript conversion and GPA, the builder registry and CSV output, the jev
-builder and its cache, definitions, laptop tokens, the definer's modes and
+builder and its cache, definitions, signing in, the definer's modes and
 attempt log, reply parsing, publishing, every browser_view route, and the
 installer's config editing.
 
 ## Changes
+
+### 2026-11-22: definitions per account, one computer at a time
+- **The server holds the definitions.** Shared ones are an AI's text (Add); an account's own
+  ones come from Update → Confirm, and Reset goes back to the shared text. Every computer
+  of the account sees the same ones; the local folder is a copy, refreshed when browser_view
+  connects, when the Upload tab lists them and before every build.
+- **3 Adds and Updates per email**, counted together (a new category, or a new own text);
+  the owner sets an email's own (`--n-limit`, `none` = no limit) and can give them back
+  (`--n-used 0`).
+- **Production can Add and Update** too: the Upload tab is the same in both run modes (Go,
+  Update, Add); prod drafts with headless Gemini. A category with no AI draft is not made.
+- **One computer at a time** per account, free 30 minutes after its last request or when
+  it signs out; another computer is told which one has it and until when.
+- Older copies' own texts are offered to the server once and kept in `old-local/`;
+  `origin`, `pending` and **Use cloud version** are gone.
+
+### 2026-11-22: accounts instead of approved tokens
+- **One account per email.** It is made on the cloud server's `/account` page: an
+  emailed code confirms the email, then the user chooses a password. Nobody approves it.
+- **Every computer signs in** with the email and password and gets its own key from the
+  server (the installer, browser_view's **Sign in**, or `python -m jev_category.login`).
+  The computer no longer makes a token, and `jev_category.enroll` is gone.
+- **Limits are per email.** The Jev daily limit (5000 by default, set per email by the
+  owner) counts every computer of the email together.
+- **Keys expire** after 90 days without use, and a password reset revokes them all.
+- **The owner's tools changed.** `jev_category.admin` is now `users`, `user <email>` and
+  `revoke-key <id>`; the old `requests`, `approve`, `reject` and `revoke` are gone.
+- **browser_view refuses other sites.** A request that changes something must come from
+  its own page (Origin, Sec-Fetch-Site), and it answers only on 127.0.0.1 / localhost.
+- **Old tokens keep working**, as keys of their email.
 
 ### 2026-11-13: production hides what has no data
 
